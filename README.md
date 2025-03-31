@@ -33,7 +33,7 @@ This is my solution to the Data Science technical test. For maintenability and b
   - **Data Source**: `optimizer/io_utils.py` includes a `DataLoader` class (support only CSV now for lack of time).
   - **Outputs**: Stateless camera and multi camera optimization classes with easy serializable JSON results `--save_path`. This make easier the future use of DBs (i.e., MongoDB, firestore, supabase...)
   - **Running the solution**:
-        `python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 100`
+        `python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 150 --save_path results/camera_optim.json`
 
 ## Setup
 1. **Install dependencies**:
