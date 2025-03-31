@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from .base_models import BaseGlobalOptimizer
 
@@ -61,6 +62,8 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         Args:
             target_fp_reduction (int): Desired FP reduction goal.
         """
+        start_time = time.time()
+
         self.target_fp_reduction = target_fp_reduction
 
         if not self.cameras_info:
@@ -79,12 +82,15 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             self.total_fp_saved += cam["fp_saved"]
             self.total_tp_lost += cam["tp_lost"]
 
+        elapsed = time.time() - start_time
+
         summary = (
             "\nOptimization Summary\n"
             f"Target FP reduction : {self.target_fp_reduction}\n"
             f"Total FP saved      : {self.total_fp_saved}\n"
             f"Total TP lost       : {self.total_tp_lost}\n"
             f"Used                : {len(self.selected)} / {len(self.cameras_info)} cameras"
+            f"Total optimization time: {elapsed:.6f} seconds"
         )
         if self.skipped:
             summary += f"\nSkipped cameras      : {self.skipped}"
