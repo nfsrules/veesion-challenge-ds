@@ -4,7 +4,7 @@ This is my solution to the Data Science technical test. For maintenability and b
 
 
 ## Directory Structure
-<pre> <code> version-challenge-ds/ ├── README.md # Project overview and instructions ├── main.py # Command-line script for Q3 and Q4 ├── requirements.txt # Dependencies ├── data/ # Input dataset (not included) ├── optimizer/ │ ├── __init__.py │ ├── base_models.py # Abstract base classes for camera and multi-camera optimizers │ ├── global_optim.py # Multi-camera optimization (Q3) │ ├── io_utils.py # Functions to load the dataset │ └── local_optim.py # Single-camera optimization model (Q3) ├── results/ # Optimization results ├── tests/ # Unit tests (out of scope due to time constraints) └── __init__.py </code> </pre>
+<pre> ```text version-challenge-ds/ ├── README.md # Project overview and instructions ├── main.py # Command-line script for Q3 and Q4 ├── requirements.txt # Dependencies ├── data/ # Input dataset (not included) ├── optimizer/ │ ├── __init__.py │ ├── base_models.py # Abstract base classes for camera and multi-camera optimizers │ ├── global_optim.py # Multi-camera optimization (Q3) │ ├── io_utils.py # Functions to load the dataset │ └── local_optim.py # Single-camera optimization model (Q3) ├── results/ # Optimization results ├── tests/ # Unit tests (out of scope due to time constraints) └── __init__.py ``` </pre>
 
 ## Answers
 
