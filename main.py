@@ -1,14 +1,10 @@
-# main.py
 import argparse
 import logging
 import os
-from optimizer.io_utils import load_dataframe
+from optimizer.io_utils import DataLoader
 from optimizer import CameraModel, MultiCameraOptimizer
-from pulp import LpProblem, LpMinimize, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
-
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
-
 
 def main(args):
     """
@@ -20,8 +16,11 @@ def main(args):
         3. Run optimization with the requested --target_fp_reduction.
         4. Save results if --save_path is specified.
     """
-
-    df = load_dataframe(args.source)
+    try:
+        df = DataLoader(args.source, source_type=args.source_type).load()
+    except Exception as e:
+        logging.error(f"Failed to load data: {e}")
+        return
 
     if args.camera_id:
         if not args.store:
@@ -35,7 +34,7 @@ def main(args):
     else:
         logging.info("Running optimization for all cameras")
 
-    optimizer = MultiCameraOptimizer(df, CameraModel, verbose=not args.quiet)
+    optimizer = MultiCameraOptimizer(df, CameraModel)
     optimizer.run(target_fp_reduction=args.target_fp_reduction, strategy=args.strategy)
 
     if args.save_path:
@@ -50,11 +49,15 @@ if __name__ == "__main__":
         help="Data source (e.g., CSV path)"
     )
     parser.add_argument(
+        "--source_type", type=str, choices=["csv"], default="csv",
+        help="Type of data source (default: csv)"
+    )
+    parser.add_argument(
         "--target_fp_reduction", type=int, default=100,
         help="Desired number of false positives to reduce globally (default: 100)"
     )
     parser.add_argument(
-        "--strategy", type=str, choices=["greedy", "lazy"], default="smart",
+        "--strategy", type=str, choices=["greedy", "lazy"], default="lazy",
         help="Optimization strategy: 'greedy' or 'lazy'. Default is 'lazy'."
     )
     parser.add_argument(

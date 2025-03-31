@@ -47,7 +47,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 "cost_ratio": camera.cost_ratio,
                 "threshold": camera.threshold,
             }
-
+        
         except Exception as e:
             logger.warning(f"Error fitting camera {camera_name}: {e}")
             self.skipped.append(camera_name)
@@ -58,7 +58,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
             if cam_info:
                 self.cameras_info.append(cam_info)
-
+     
     def run(self, target_fp_reduction: int, strategy: str = "greedy"):
         assert strategy in ["greedy", "lazy"], "Strategy must be 'greedy' or 'lazy'"
 
@@ -135,7 +135,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 break
 
             group = grouped.get_group((store, cam_id))
-            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=False)
+            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
 
             if cam_info:
                 self.cameras_info.append(cam_info)
