@@ -112,6 +112,9 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
 
         grouped = self.df.groupby(["store", "camera_id"])
 
+        # Let's preselect the cameras that have an high numeber of normal events
+        # Because they're likelly to produce a lot of FP.
+        # We need to pay more attention to those.
         priority_list = []
         for (store, cam_id), group in grouped:
             baseline_fp = (group["is_theft"] == 0).sum()
@@ -126,6 +129,8 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         self.skipped = []
 
         for (store, cam_id), _ in priority_list:
+
+            # Let's fit thresholds until we get the target reduction
             if self.total_fp_saved >= target_fp_reduction:
                 break
 
