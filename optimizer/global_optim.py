@@ -28,7 +28,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         if not self.verbose:
             logger.setLevel(logging.WARNING)
 
-    def _fit_cameras(self):
+    def _fit_cameras(self, method):
         for (store, cam_id), group in self.df.groupby(['store', 'camera_id']):
             X = group['probability'].values.astype(float)
             y = group['is_theft'].values
@@ -37,7 +37,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             camera = self.camera_model_cls(camera_id=camera_name)
 
             try:
-                camera.fit(X, y, method="cost")
+                camera.fit(X, y, method=method)
                 gain = camera.report_gain()
 
                 if gain["fp_saved"] > 0:
@@ -55,19 +55,21 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 logger.warning(f"Error fitting camera {camera_name}: {e}")
                 self.skipped.append(camera_name)
 
-    def run(self, target_fp_reduction: int):
+    def run(self, target_fp_reduction: int, method: str = "greedy"):
         """
         Run greedy optimization using fitted camera models.
 
         Args:
             target_fp_reduction (int): Desired FP reduction goal.
+            method (str): Desired optimization method "greedy" or "optuna".
         """
+        assert method in ['greedy', 'optuna']
         start_time = time.time()
 
         self.target_fp_reduction = target_fp_reduction
 
         if not self.cameras_info:
-            self._fit_cameras()
+            self._fit_cameras(method)
 
         self.cameras_info.sort(key=lambda x: x["cost_ratio"])
 

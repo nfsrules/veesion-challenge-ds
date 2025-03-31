@@ -3,7 +3,8 @@ import json
 import numpy as np
 import logging
 from datetime import datetime
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score, precision_recall_curve
+import optuna
 
 from .base_models import BaseCameraModel
 
@@ -16,15 +17,15 @@ class CameraModel(BaseCameraModel):
     to classify theft events using a selected optimization strategy with included persistence.
     """
 
-    def fit(self, X, y, method="cost", nrb_steps=2000, verbose=True):
+    def fit(self, X, y, method="greedy", nrb_steps=2000, verbose=True):
         """
         Fit camera prediction model by selecting an optimal threshold based on prediction scores and labels.
 
         Available methods:
-            - 'cost': Minimizes true positives lost per false positive saved.
+            - 'greedy': Minimizes true positives lost per false positive saved.
                 Optional kwargs:
                     - steps (int): Number of thresholds to evaluate (default: 500)
-            - 'greedy': Greedily increases threshold to reduce cost until no further improvement.
+            - 'optuna': Greedily increases threshold to reduce cost until no further improvement.
                 Optional kwargs:
                     - steps (int): Number of thresholds to evaluate (default: 500)
 
@@ -44,10 +45,10 @@ class CameraModel(BaseCameraModel):
 
         self.baseline_tp, self.baseline_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
-        if method == "cost":
-            best_th = self._fit_cost(X, y, steps=nrb_steps)
-        elif method == "greedy":
+        if method == "greedy":
             best_th = self._fit_greedy(X, y, steps=nrb_steps)
+        elif method == "optuna":
+            best_th = self._fit_optuna(X, y, n_trials=500)
         else:
             raise ValueError(f"Unknown optimization method: {method}")
 
@@ -71,19 +72,24 @@ class CameraModel(BaseCameraModel):
         """Compute the cost as true positives lost per false positive saved."""
         return float("inf") if fp_saved <= 0 else tp_lost / (fp_saved + 1e-8)
 
-    def _fit_cost(self, X, y, steps=500):
+    def _fit_greedy(self, X, y, steps=500):
         """Grid search for optimal threshold minimizing TP lost / FP saved."""
-        thresholds = np.linspace(0, 1, steps)
-        base_tp, base_fp = self.baseline_tp, self.baseline_fp
+        base_tp, base_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if base_fp == 0 or base_tp == 0:
             return self.threshold
 
+        precision, recall, thresholds = precision_recall_curve(y, X)
+        total_pos = np.sum(y)
+
         best_score = np.inf
         best_th = self.threshold
 
-        for th in thresholds:
-            tp, fp = self._compute_tp_fp(X, y, threshold=th)
+        for i in range(len(thresholds)):
+            tp = recall[i] * total_pos
+            # invert precision = TP / (TP + FP) to get FP
+            fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
+
             delta_tp = base_tp - tp
             delta_fp = base_fp - fp
 
@@ -91,16 +97,27 @@ class CameraModel(BaseCameraModel):
                 continue
 
             cost = delta_tp / (delta_fp + 1e-8)
-            if cost < best_score or (cost == best_score and th > best_th):
+            if cost < best_score or (cost == best_score and thresholds[i] > best_th):
                 best_score = cost
-                best_th = th
+                best_th = thresholds[i]
 
         return best_th
 
-    def _fit_greedy(self, X, y, steps=500):
-        """Greedily increase threshold to reduce cost until no further gain."""
-        pass
-        return 
+    def _fit_optuna(self, X, y, n_trials=100):
+        base_tp, base_fp = self.baseline_tp, self.baseline_fp
+
+        def objective(trial):
+            threshold = trial.suggest_float("threshold", 0.0, 1.0)
+            tp, fp = self._compute_tp_fp(X, y, threshold)
+            delta_tp = base_tp - tp
+            delta_fp = base_fp - fp
+            if delta_fp <= 0:
+                return float("inf")
+            return delta_tp / (delta_fp + 1e-8)
+
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=n_trials)
+        return study.best_params["threshold"]
 
     def _apply_threshold(self, X, threshold):
         """Apply binary threshold to scores."""
