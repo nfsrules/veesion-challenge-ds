@@ -19,7 +19,7 @@ def main(args):
         4. Save results if --save_path is specified.
     """
 
-    df = load_dataframe(args.source, source_type=args.source_type)
+    df = load_dataframe(args.source)
 
     if args.camera_id:
         if not args.store:
@@ -46,10 +46,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--source", type=str, required=True,
         help="Data source (e.g., CSV path)"
-    )
-    parser.add_argument(
-        "--source_type", type=str, default="csv", choices=["csv", "db"],
-        help="Source type (default: csv)"
     )
     parser.add_argument(
         "--target_fp_reduction", type=int, default=100,

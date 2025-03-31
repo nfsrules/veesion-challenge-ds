@@ -27,10 +27,6 @@ class BaseCameraModel(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self, X, y, threshold=None):
-        pass
-
-    @abstractmethod
     def save(self, path):
         pass
 

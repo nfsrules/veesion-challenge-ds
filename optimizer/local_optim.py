@@ -61,11 +61,11 @@ class CameraModel(BaseCameraModel):
         self.updated_at = datetime.now()
 
         if verbose:
-            logger.info(f"Finished fitting camera {self.camera_id}")
-            logger.debug(f" - Best threshold: {self.threshold:.4f}")
-            logger.debug(f" - TP lost: {self.tp_lost}")
-            logger.debug(f" - FP saved: {self.fp_saved}")
-            logger.debug(f" - Cost ratio: {self.cost_ratio:.4f}")
+            logger.info(
+                f"Fitted camera {self.camera_id[:-5]}. "
+                f"Optimal th: {round(self.threshold, 4)}. "
+                f"FP saved: {self.fp_saved}, TP lost: {self.tp_lost}"
+            )
 
     def _compute_cost_ratio(self, tp_lost, fp_saved):
         """Compute the cost as true positives lost per false positive saved."""
@@ -99,32 +99,8 @@ class CameraModel(BaseCameraModel):
 
     def _fit_greedy(self, X, y, steps=500):
         """Greedily increase threshold to reduce cost until no further gain."""
-        thresholds = np.linspace(0, 1, steps)
-        base_tp, base_fp = self.baseline_tp, self.baseline_fp
-
-        if base_fp == 0 or base_tp == 0:
-            return self.threshold
-
-        best_th = self.threshold
-        best_cost = float("inf")
-
-        for th in thresholds:
-            tp, fp = self._compute_tp_fp(X, y, threshold=th)
-            delta_tp = base_tp - tp
-            delta_fp = base_fp - fp
-
-            if delta_fp <= 0:
-                continue
-
-            cost = self._compute_cost_ratio(delta_tp, delta_fp)
-
-            if cost < best_cost:
-                best_cost = cost
-                best_th = th
-            else:
-                break
-
-        return best_th
+        pass
+        return 
 
     def _apply_threshold(self, X, threshold):
         """Apply binary threshold to scores."""
@@ -142,15 +118,15 @@ class CameraModel(BaseCameraModel):
         if not self._fitted:
             raise RuntimeError("Model must be fit before reporting gain.")
         return {
-            "baseline_tp": self.baseline_tp,
-            "baseline_fp": self.baseline_fp,
-            "optimal_tp": self.optimal_tp,
-            "optimal_fp": self.optimal_fp,
-            "tp_lost": self.tp_lost,
-            "fp_saved": self.fp_saved,
-            "threshold": self.threshold,
+            "baseline_tp": int(self.baseline_tp),
+            "baseline_fp": int(self.baseline_fp),
+            "optimal_tp": int(self.optimal_tp),
+            "optimal_fp": int(self.optimal_fp),
+            "tp_lost": int(self.tp_lost),
+            "fp_saved": int(self.fp_saved),
+            "threshold": float(self.threshold),
             "cost_method": self.optim_method,
-            "cost_ratio": self.cost_ratio
+            "cost_ratio": float(self.cost_ratio)
         }
 
     def predict(self, X):

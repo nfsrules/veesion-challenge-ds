@@ -46,7 +46,6 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                         "tp_lost": gain["tp_lost"],
                         "cost_ratio": camera.cost_ratio,
                         "threshold": camera.threshold,
-                        "model": camera
                     })
                 else:
                     self.skipped.append(camera_name)
@@ -85,7 +84,6 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             f"Target FP reduction : {self.target_fp_reduction}\n"
             f"Total FP saved      : {self.total_fp_saved}\n"
             f"Total TP lost       : {self.total_tp_lost}\n"
-            f"Selected cameras    : {self.selected}\n"
             f"Used                : {len(self.selected)} / {len(self.cameras_info)} cameras"
         )
         if self.skipped:
@@ -95,11 +93,9 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
 
     def to_dict(self):
         return {
-            "target_fp_reduction": self.target_fp_reduction,
-            "total_fp_saved": self.total_fp_saved,
-            "total_tp_lost": self.total_tp_lost,
-            "selected": self.selected,
-            "skipped": self.skipped,
+            "target_fp_reduction": int(self.target_fp_reduction),
+            "total_fp_saved": int(self.total_fp_saved),
+            "total_tp_lost": int(self.total_tp_lost),
             "cameras_info": self.cameras_info
         }
 
