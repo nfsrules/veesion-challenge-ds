@@ -4,6 +4,8 @@ import logging
 import os
 from optimizer.io_utils import load_dataframe
 from optimizer import CameraModel, MultiCameraOptimizer
+from pulp import LpProblem, LpMinimize, LpVariable, lpSum, LpBinary, PULP_CBC_CMD
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 
@@ -52,8 +54,8 @@ if __name__ == "__main__":
         help="Desired number of false positives to reduce globally (default: 100)"
     )
     parser.add_argument(
-        "--strategy", type=str, choices=["smart", "naive"], default="smart",
-        help="Optimization strategy: 'smart' (greedy) or 'naive' (brute-force). Default is 'smart'."
+        "--strategy", type=str, choices=["greedy", "lazy"], default="smart",
+        help="Optimization strategy: 'greedy' or 'lazy'. Default is 'lazy'."
     )
     parser.add_argument(
         "--store", type=str,
