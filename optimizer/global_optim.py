@@ -70,16 +70,15 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 self.cameras_info.append(cam_info)
      
     def run(self, target_fp_reduction: float, strategy: str = "greedy"):
-        assert strategy in ["greedy", "lazy"], "Strategy must be 'greedy' or 'lazy'"
 
         logger.info(f"Running {strategy} optimization...")
 
-        if strategy == "lazy":
+        if strategy == "greedy":
             self._greedy_run(target_fp_reduction)
         else:
             self._global_run(target_fp_reduction)
 
-    def _greedy_run_(self, target_fp_reduction: int, method: str = "cost"):
+    def _greedy_run(self, target_fp_reduction: int, method: str = "cost"):
         start_time = time.time()
         
         total_tp_at_0 = (self.df["is_theft"] == 1).sum()
@@ -150,7 +149,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         )
         logger.info(summary)
 
-    def _greedy_run(self, target_fp_reduction: float, method: str = "cost"):
+    def _global_run(self, target_fp_reduction: float, verbose=True):
         """
         Optimize thresholds across all cameras using linear programming to achieve
         a target FP reduction while minimizing TP reduction.
@@ -176,16 +175,6 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         grouped = self.df.groupby(["store", "camera_id"])
         cameras = list(grouped.groups.keys())
         N = len(cameras)
-
-        # Choose weight strategy
-        if target_fp_reduction >= 0.20:
-            weight = AGGRESSIVE
-        elif target_fp_reduction >= 0.15:
-            weight = STRICT
-        elif target_fp_reduction >= 0.10:
-            weight = BALANCED
-        else:
-            weight = CONSERVATIVE
 
         # Precompute threshold effects
         threshold_data = {}
@@ -250,15 +239,22 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                         tp_lost = threshold_data[i]["tp_red"][k]
                         cam_info = {
                             "store": store,
-                            "camera_id": cam_id,
-                            "threshold": threshold,
-                            "fp_saved": fp_saved,
-                            "tp_lost": tp_lost
+                            "camera_id": int(cam_id),
+                            "threshold": float(threshold),
+                            "fp_saved": int(fp_saved),
+                            "tp_lost": int(tp_lost)
                         }
                         self.cameras_info.append(cam_info)
                         self.selected.append(cam_id)
                         self.total_fp_saved += fp_saved
                         self.total_tp_lost += tp_lost
+
+                        if verbose:
+                            logger.info(
+                                f"Fitted camera {cam_id}. "
+                                f"Optimal th: {round(threshold, 4)}. "
+                                f"FP saved: {fp_saved}, TP lost: {tp_lost}"
+                            )
                         break
         else:
             logger.warning(f"Optimization failed: {LpStatus[prob.status]}")
@@ -276,7 +272,6 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             f"Total optimization time: {elapsed:.4f} seconds"
         )
         logger.info(summary)
-        
 
     def to_dict(self):
         return {

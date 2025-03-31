@@ -57,8 +57,8 @@ if __name__ == "__main__":
         help="Desired percentage of false positives to reduce globally (default: 0.20 (20%))"
     )
     parser.add_argument(
-        "--strategy", type=str, choices=["greedy", "lazy"], default="lazy",
-        help="Optimization strategy: 'greedy' or 'lazy'. Default is 'lazy'."
+        "--strategy", type=str, choices=["greedy", "global"], default="lazy",
+        help="Optimization strategy: 'greedy' or 'global'. Default is 'global'."
     )
     parser.add_argument(
         "--store", type=str,
