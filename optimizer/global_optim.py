@@ -1,6 +1,8 @@
 import json
 import logging
 import time
+from itertools import combinations
+from tqdm import tqdm 
 
 from .base_models import BaseGlobalOptimizer
 
@@ -55,7 +57,67 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 logger.warning(f"Error fitting camera {camera_name}: {e}")
                 self.skipped.append(camera_name)
 
-    def run(self, target_fp_reduction: int, method: str = "greedy"):
+    def run(self, target_fp_reduction: int, strategy: str = "smart"):
+        """
+        Run optimization using the specified strategy.
+
+        Args:
+            target_fp_reduction (int): Desired FP reduction goal.
+            strategy (str): "naive" for brute-force or "smart" for greedy.
+        """
+        assert strategy in ["naive", "smart"], "Strategy must be either 'naive' or 'smart'"
+
+        logger.info(f"Running {strategy} optimization for all cameras")
+
+        if strategy == "naive":
+            self._naive_run(target_fp_reduction)
+        else:
+            self._smart_run(target_fp_reduction)
+
+    def _naive_run(self, target_fp_reduction: int):
+        
+        logger.warning("Do not run this! Never!")
+
+        start_time = time.time()
+        self.target_fp_reduction = target_fp_reduction
+
+        if not self.cameras_info:
+            self._fit_cameras(method="cost")
+
+        cams = self.cameras_info
+        n = len(cams)
+
+        best_subset = None
+        best_tp_lost = float('inf')
+        best_fp_saved = 0
+
+        for r in tqdm(range(1, n + 1)):
+            for subset in combinations(cams, r):
+                total_fp = sum(cam["fp_saved"] for cam in subset)
+                total_tp = sum(cam["tp_lost"] for cam in subset)
+
+                if total_fp >= target_fp_reduction and total_tp < best_tp_lost:
+                    best_subset = subset
+                    best_tp_lost = total_tp
+                    best_fp_saved = total_fp
+
+        self.selected = [cam["camera_id"] for cam in best_subset] if best_subset else []
+        self.total_fp_saved = best_fp_saved
+        self.total_tp_lost = best_tp_lost
+
+        elapsed = time.time() - start_time
+
+        summary = (
+            "\n[Naive Brute-Force Summary]\n"
+            f"Target FP reduction : {self.target_fp_reduction}\n"
+            f"Total FP saved      : {self.total_fp_saved}\n"
+            f"Total TP lost       : {self.total_tp_lost}\n"
+            f"Used                : {len(self.selected)} / {n} cameras\n"
+            f"Optimization time   : {elapsed:.4f} seconds"
+        )
+        logger.info(summary)
+
+    def _smart_run(self, target_fp_reduction: int, method: str = "cost"):
         """
         Run greedy optimization using fitted camera models.
 
@@ -63,7 +125,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             target_fp_reduction (int): Desired FP reduction goal.
             method (str): Desired optimization method "greedy" or "optuna".
         """
-        assert method in ['greedy', 'optuna']
+        assert method in ['cost', 'optuna']
         start_time = time.time()
 
         self.target_fp_reduction = target_fp_reduction

@@ -34,7 +34,7 @@ def main(args):
         logging.info("Running optimization for all cameras")
 
     optimizer = MultiCameraOptimizer(df, CameraModel, verbose=not args.quiet)
-    optimizer.run(target_fp_reduction=args.target_fp_reduction)
+    optimizer.run(target_fp_reduction=args.target_fp_reduction, strategy=args.strategy)
 
     if args.save_path:
         os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
@@ -50,6 +50,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target_fp_reduction", type=int, default=100,
         help="Desired number of false positives to reduce globally (default: 100)"
+    )
+    parser.add_argument(
+        "--strategy", type=str, choices=["smart", "naive"], default="smart",
+        help="Optimization strategy: 'smart' (greedy) or 'naive' (brute-force). Default is 'smart'."
     )
     parser.add_argument(
         "--store", type=str,

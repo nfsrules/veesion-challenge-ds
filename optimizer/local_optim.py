@@ -17,12 +17,12 @@ class CameraModel(BaseCameraModel):
     to classify theft events using a selected optimization strategy with included persistence.
     """
 
-    def fit(self, X, y, method="greedy", nrb_steps=2000, verbose=True):
+    def fit(self, X, y, method="cost", verbose=True):
         """
         Fit camera prediction model by selecting an optimal threshold based on prediction scores and labels.
 
         Available methods:
-            - 'greedy': Minimizes true positives lost per false positive saved.
+            - 'cost': Minimizes true positives lost per false positive saved.
                 Optional kwargs:
                     - steps (int): Number of thresholds to evaluate (default: 500)
             - 'optuna': Greedily increases threshold to reduce cost until no further improvement.
@@ -45,10 +45,10 @@ class CameraModel(BaseCameraModel):
 
         self.baseline_tp, self.baseline_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
-        if method == "greedy":
-            best_th = self._fit_greedy(X, y, steps=nrb_steps)
+        if method == "cost":
+            best_th = self._fit_cost(X, y)
         elif method == "optuna":
-            best_th = self._fit_optuna(X, y, n_trials=500)
+            best_th = self._fit_optuna(X, y, n_trials=50)
         else:
             raise ValueError(f"Unknown optimization method: {method}")
 
@@ -72,7 +72,7 @@ class CameraModel(BaseCameraModel):
         """Compute the cost as true positives lost per false positive saved."""
         return float("inf") if fp_saved <= 0 else tp_lost / (fp_saved + 1e-8)
 
-    def _fit_greedy(self, X, y, steps=500):
+    def _fit_cost(self, X, y):
         """Grid search for optimal threshold minimizing TP lost / FP saved."""
         base_tp, base_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
@@ -87,6 +87,7 @@ class CameraModel(BaseCameraModel):
 
         for i in range(len(thresholds)):
             tp = recall[i] * total_pos
+
             # invert precision = TP / (TP + FP) to get FP
             fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
 
