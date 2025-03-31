@@ -53,8 +53,8 @@ if __name__ == "__main__":
         help="Type of data source (default: csv)"
     )
     parser.add_argument(
-        "--target_fp_reduction", type=int, default=100,
-        help="Desired number of false positives to reduce globally (default: 100)"
+        "--target_fp_reduction", type=float, default=0.10,
+        help="Desired percentage of false positives to reduce globally (default: 0.20 (20%))"
     )
     parser.add_argument(
         "--strategy", type=str, choices=["greedy", "lazy"], default="lazy",

@@ -17,7 +17,7 @@ class CameraModel(BaseCameraModel):
     to classify theft events using a selected optimization strategy with included persistence.
     """
 
-    def fit(self, X, y, method="cost", verbose=True):
+    def fit(self, X, y, method="cost", weight=0.01, verbose=True):
         """
         Fit camera prediction model by selecting an optimal threshold based on prediction scores and labels.
 
@@ -46,9 +46,7 @@ class CameraModel(BaseCameraModel):
         self.baseline_tp, self.baseline_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if method == "cost":
-            best_th = self._fit_cost(X, y)
-        elif method == "optuna":
-            best_th = self._fit_optuna(X, y, n_trials=50)
+            best_th = self._fit_cost(X, y, weight=weight)
         else:
             raise ValueError(f"Unknown optimization method: {method}")
 
@@ -71,9 +69,9 @@ class CameraModel(BaseCameraModel):
     def _compute_cost_ratio(self, tp_lost, fp_saved):
         """Compute the cost as true positives lost per false positive saved."""
         return float("inf") if fp_saved <= 0 else tp_lost / (fp_saved + 1e-8)
-
-    def _fit_cost(self, X, y):
-        """Grid search for optimal threshold minimizing TP lost / FP saved."""
+    
+    def _fit_cost(self, X, y, weight=0.01):
+        """Grid search for optimal threshold minimizing weighted TP loss / FP saved, with debugging."""
         base_tp, base_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if base_fp == 0 or base_tp == 0:
@@ -85,10 +83,10 @@ class CameraModel(BaseCameraModel):
         best_score = np.inf
         best_th = self.threshold
 
-        for i in range(len(thresholds)):
+        for i, th in enumerate(thresholds):
             tp = recall[i] * total_pos
 
-            # invert precision = TP / (TP + FP) to get FP
+            # Invert precision to get FP estimate
             fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
 
             delta_tp = base_tp - tp
@@ -97,29 +95,18 @@ class CameraModel(BaseCameraModel):
             if delta_fp <= 0:
                 continue
 
-            cost = delta_tp / (delta_fp + 1e-8)
-            if cost < best_score or (cost == best_score and thresholds[i] > best_th):
+            if delta_tp == 0 and delta_fp > 0:
+                # Give a small cost to tie-break thresholds with no TP loss
+                cost = 1e-4
+            else:
+                cost = (delta_tp * weight) / (delta_fp  + 1e-8)
+
+            if cost < best_score or (cost == best_score and th > best_th):
                 best_score = cost
-                best_th = thresholds[i]
+                best_th = th
 
         return best_th
-
-    def _fit_optuna(self, X, y, n_trials=100):
-        base_tp, base_fp = self.baseline_tp, self.baseline_fp
-
-        def objective(trial):
-            threshold = trial.suggest_float("threshold", 0.0, 1.0)
-            tp, fp = self._compute_tp_fp(X, y, threshold)
-            delta_tp = base_tp - tp
-            delta_fp = base_fp - fp
-            if delta_fp <= 0:
-                return float("inf")
-            return delta_tp / (delta_fp + 1e-8)
-
-        study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=n_trials)
-        return study.best_params["threshold"]
-
+    
     def _apply_threshold(self, X, threshold):
         """Apply binary threshold to scores."""
         return (X >= threshold).astype(int)

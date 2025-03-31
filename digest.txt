@@ -10,7 +10,8 @@ Directory structure:
     │   ├── global_optim.py
     │   ├── io_utils.py
     │   ├── local_optim.py
-    │   └── viz_utils.py
+    │   ├── viz_utils.py
+    │   └── __pycache__/
     ├── results/
     └── tests/
         └── __init__.py
@@ -18,21 +19,59 @@ Directory structure:
 ================================================
 File: README.md
 ================================================
-# veesion-challenge-ds
+# Veesion Data Science Challenge
+
+This is my solution to the Data Science technical test. For maintenability and better usage 
+
+
+## Directory Structure
+```text version-challenge-ds/ ├── README.md # Project overview and instructions ├── main.py # Command-line script for Q3 and Q4 ├── requirements.txt # Dependencies ├── data/ # Input dataset (not included) ├── optimizer/ │ ├── __init__.py │ ├── base_models.py # Abstract base classes for camera and multi-camera optimizers │ ├── global_optim.py # Multi-camera optimization (Q3) │ ├── io_utils.py # Functions to load the dataset │ └── local_optim.py # Single-camera optimization model (Q3) ├── results/ # Optimization results ├── tests/ # Unit tests (out of scope due to time constraints) └── __init__.py ``` 
+
+## Answers
+
+### Question 1: Plot #FP vs. Recall curves for each camera and save as separate images.
+- **Answer**: Refer to the (`analysis_notebook.ipynb`). The notebook includes data exploration, curve generation using `matplotlib`, and saving plots to the `results/` directory.
+
+### Question 2: Analyze the model's performaance uniformness across cameras
+- **Answer**: Refer to Section 2 of the Jupyter notebook (`analysis_notebook.ipynb`).
+
+### Question 3: Optimization: Find an optimal per-camera threshold to reduce the total #FP by a target, without loosing too mane #TP.
+- **Greedy/Naive implementations**: 
+  - **Camera-level**: Select the threshold that minimizes the #TP lost per #FP avoided (reduce false alarms without loosing too much real theft). Implemented in `optimizer/local_optim.py` (`_fit_cost`).
+  - **Multi-camera level**: Sort the cameras by cost ratio (TP lost / FP saved) and optimize them iterativelly until reaching the target #FP reduction. Implemented in `optimizer/global_optim.py` (`MultiCameraOptimizer`).
+  - **Running the solution**:
+        `python main.py --source data/production_alerts_meta_data.csv --target_fp_reduction 12000 --save_path results/optim.json`
+
+ - **Smarter implementations**: 
+  - **Camera-level**: 
+  - **Multi-camera level**: 
+
+### Question 4: Deployment: Making sure the code is simple to deploy
+- **Task**: Prepare the script for deployment with flexible data sources, command-line execution, and single-camera support.
+- **Implementation**: 
+  - **CLI**: `main.py` using `argparse` for CL execution at multi and single camera level.
+  - **Loging**: Added basic loging support.
+  - **Data Source**: `optimizer/io_utils.py` includes a `DataLoader` class (support only CSV now for lack of time).
+  - **Outputs**: Stateless camera and multi camera optimization classes with easy serializable JSON results `--save_path`. This make easier the future use of DBs (i.e., MongoDB, firestore, supabase...)
+  - **Running the solution**:
+        `python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 150 --save_path results/camera_optim.json`
+
+## Setup
+1. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
 
 
 ================================================
 File: main.py
 ================================================
-# main.py
 import argparse
 import logging
 import os
-from optimizer.io_utils import load_dataframe
+from optimizer.io_utils import DataLoader
 from optimizer import CameraModel, MultiCameraOptimizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
-
 
 def main(args):
     """
@@ -44,8 +83,11 @@ def main(args):
         3. Run optimization with the requested --target_fp_reduction.
         4. Save results if --save_path is specified.
     """
-
-    df = load_dataframe(args.source, source_type=args.source_type)
+    try:
+        df = DataLoader(args.source, source_type=args.source_type).load()
+    except Exception as e:
+        logging.error(f"Failed to load data: {e}")
+        return
 
     if args.camera_id:
         if not args.store:
@@ -59,8 +101,8 @@ def main(args):
     else:
         logging.info("Running optimization for all cameras")
 
-    optimizer = MultiCameraOptimizer(df, CameraModel, verbose=not args.quiet)
-    optimizer.run(target_fp_reduction=args.target_fp_reduction)
+    optimizer = MultiCameraOptimizer(df, CameraModel)
+    optimizer.run(target_fp_reduction=args.target_fp_reduction, strategy=args.strategy)
 
     if args.save_path:
         os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
@@ -74,12 +116,16 @@ if __name__ == "__main__":
         help="Data source (e.g., CSV path)"
     )
     parser.add_argument(
-        "--source_type", type=str, default="csv", choices=["csv", "db"],
-        help="Source type (default: csv)"
+        "--source_type", type=str, choices=["csv"], default="csv",
+        help="Type of data source (default: csv)"
     )
     parser.add_argument(
         "--target_fp_reduction", type=int, default=100,
         help="Desired number of false positives to reduce globally (default: 100)"
+    )
+    parser.add_argument(
+        "--strategy", type=str, choices=["greedy", "lazy"], default="lazy",
+        help="Optimization strategy: 'greedy' or 'lazy'. Default is 'lazy'."
     )
     parser.add_argument(
         "--store", type=str,
@@ -100,6 +146,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     main(args)
+
 
 
 ================================================
@@ -150,10 +197,6 @@ class BaseCameraModel(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self, X, y, threshold=None):
-        pass
-
-    @abstractmethod
     def save(self, path):
         pass
 
@@ -193,6 +236,7 @@ File: optimizer/global_optim.py
 ================================================
 import json
 import logging
+import time
 
 from .base_models import BaseGlobalOptimizer
 
@@ -201,11 +245,6 @@ logger = logging.getLogger(__name__)
 
 class MultiCameraOptimizer(BaseGlobalOptimizer):
     def __init__(self, df, camera_model_cls, verbose=True):
-        """
-        Args:
-            df (pd.DataFrame): Must contain 'store', 'camera_id', 'probability', 'is_theft'.
-            verbose (bool): Whether to print fitting logs.
-        """
         self.df = df
         self.camera_model_cls = camera_model_cls
         self.verbose = verbose
@@ -220,45 +259,60 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         if not self.verbose:
             logger.setLevel(logging.WARNING)
 
-    def _fit_cameras(self):
-        for (store, cam_id), group in self.df.groupby(['store', 'camera_id']):
-            X = group['probability'].values.astype(float)
-            y = group['is_theft'].values
-            camera_name = f"{store}_cam{cam_id}"
+    def _fit_camera(self, store, cam_id, group, method="cost", verbose=False):
+        """
+        Fit and evaluate a single camera, returning gain info if valid.
+        """
+        X = group["probability"].values.astype(float)
+        y = group["is_theft"].values
+        camera_name = f"{store}_cam{cam_id}"
+        camera = self.camera_model_cls(camera_id=camera_name)
 
-            camera = self.camera_model_cls(camera_id=camera_name)
+        try:
+            camera.fit(X, y, method=method, verbose=verbose)
+            gain = camera.report_gain()
 
-            try:
-                camera.fit(X, y, method="cost")
-                gain = camera.report_gain()
-
-                if gain["fp_saved"] > 0:
-                    self.cameras_info.append({
-                        "camera_id": camera_name,
-                        "fp_saved": gain["fp_saved"],
-                        "tp_lost": gain["tp_lost"],
-                        "cost_ratio": camera.cost_ratio,
-                        "threshold": camera.threshold,
-                        "model": camera
-                    })
-                else:
-                    self.skipped.append(camera_name)
-
-            except Exception as e:
-                logger.warning(f"Error fitting camera {camera_name}: {e}")
+            if gain["fp_saved"] <= 0:
                 self.skipped.append(camera_name)
+                return None
 
-    def run(self, target_fp_reduction: int):
-        """
-        Run greedy optimization using fitted camera models.
+            return {
+                "camera_id": camera_name,
+                "fp_saved": gain["fp_saved"],
+                "tp_lost": gain["tp_lost"],
+                "cost_ratio": camera.cost_ratio,
+                "threshold": camera.threshold,
+            }
+        
+        except Exception as e:
+            logger.warning(f"Error fitting camera {camera_name}: {e}")
+            self.skipped.append(camera_name)
+            return None
 
-        Args:
-            target_fp_reduction (int): Desired FP reduction goal.
-        """
+    def _fit_cameras(self, method):
+        for (store, cam_id), group in self.df.groupby(['store', 'camera_id']):
+            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
+            if cam_info:
+                self.cameras_info.append(cam_info)
+     
+    def run(self, target_fp_reduction: int, strategy: str = "greedy"):
+        assert strategy in ["greedy", "lazy"], "Strategy must be 'greedy' or 'lazy'"
+
+        logger.info(f"Running {strategy} optimization...")
+
+        if strategy == "lazy":
+            self._lazy_run(target_fp_reduction)
+        else:
+            self._greedy_run(target_fp_reduction)
+
+    def _greedy_run(self, target_fp_reduction: int, method: str = "cost"):
+        assert method in ['cost', 'optuna']
+        start_time = time.time()
+
         self.target_fp_reduction = target_fp_reduction
 
         if not self.cameras_info:
-            self._fit_cameras()
+            self._fit_cameras(method)
 
         self.cameras_info.sort(key=lambda x: x["cost_ratio"])
 
@@ -273,26 +327,76 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             self.total_fp_saved += cam["fp_saved"]
             self.total_tp_lost += cam["tp_lost"]
 
+        elapsed = time.time() - start_time
+
         summary = (
             "\nOptimization Summary\n"
             f"Target FP reduction : {self.target_fp_reduction}\n"
             f"Total FP saved      : {self.total_fp_saved}\n"
             f"Total TP lost       : {self.total_tp_lost}\n"
-            f"Selected cameras    : {self.selected}\n"
             f"Used                : {len(self.selected)} / {len(self.cameras_info)} cameras"
+            f"Total optimization time: {elapsed:.6f} seconds"
         )
         if self.skipped:
             summary += f"\nSkipped cameras      : {self.skipped}"
 
         logger.info(summary)
 
+    def _lazy_run(self, target_fp_reduction: int, method: str = "cost"):
+        start_time = time.time()
+        self.target_fp_reduction = target_fp_reduction
+
+        grouped = self.df.groupby(["store", "camera_id"])
+
+        # Let's preselect the cameras that have an high numeber of normal events
+        # Because they're likelly to produce a lot of FP.
+        # We need to pay more attention to those.
+        priority_list = []
+        for (store, cam_id), group in grouped:
+            baseline_fp = (group["is_theft"] == 0).sum()
+            priority_list.append(((store, cam_id), baseline_fp))
+
+        priority_list.sort(key=lambda x: -x[1])
+
+        self.selected = []
+        self.total_fp_saved = 0
+        self.total_tp_lost = 0
+        self.cameras_info = []
+        self.skipped = []
+
+        for (store, cam_id), _ in priority_list:
+
+            # Let's fit thresholds until we get the target reduction
+            if self.total_fp_saved >= target_fp_reduction:
+                break
+
+            group = grouped.get_group((store, cam_id))
+            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
+
+            if cam_info:
+                self.cameras_info.append(cam_info)
+                self.selected.append(cam_info["camera_id"])
+                self.total_fp_saved += cam_info["fp_saved"]
+                self.total_tp_lost += cam_info["tp_lost"]
+
+        elapsed = time.time() - start_time
+
+        summary = (
+            "\n[Lazy Greedy Optimization Summary]\n"
+            f"Target FP reduction : {self.target_fp_reduction}\n"
+            f"Total FP saved      : {self.total_fp_saved}\n"
+            f"Total TP lost       : {self.total_tp_lost}\n"
+            f"Used                : {len(self.selected)} cameras\n"
+            f"Skipped             : {len(self.skipped)} cameras\n"
+            f"Total optimization time: {elapsed:.4f} seconds"
+        )
+        logger.info(summary)
+
     def to_dict(self):
         return {
-            "target_fp_reduction": self.target_fp_reduction,
-            "total_fp_saved": self.total_fp_saved,
-            "total_tp_lost": self.total_tp_lost,
-            "selected": self.selected,
-            "skipped": self.skipped,
+            "target_fp_reduction": int(self.target_fp_reduction),
+            "total_fp_saved": int(self.total_fp_saved),
+            "total_tp_lost": int(self.total_tp_lost),
             "cameras_info": self.cameras_info
         }
 
@@ -321,41 +425,57 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
 ================================================
 File: optimizer/io_utils.py
 ================================================
+# optimizer/io_utils.py
 import os
 import pandas as pd
+import logging
+from typing import Optional, List
 
+logger = logging.getLogger(__name__)
 
-THEFT_LABELS = [
+DEFAULT_THEFT_LABELS = [
     'Suspicious Bag', 'Suspicious', 'Theft',
     'Gesture Into Body', 'Product Into Stroller'
 ]
 
+class DataLoader:
+    def __init__(self, source: str, source_type: str = "csv", theft_labels: Optional[List[str]] = None):
+        """
+        Flexible data loader.
 
-def load_dataframe(csv_path: str) -> pd.DataFrame:
-    """
-    Loads, cleans, and annotates the production alerts metadata CSV.
+        Args:
+            source (str): File path or connection string.
+            source_type (str): One of ['csv'].
+            theft_labels (List[str], optional): Override default labels.
+        """
+        self.source = source
+        self.source_type = source_type
+        self.theft_labels = theft_labels or DEFAULT_THEFT_LABELS
 
-    - Reads CSV with ';' delimiter
-    - Drops NaNs
-    - Creates 'is_theft' column based on label list
-    - Extracts 'camera_id' from 'video_name'
+    def load(self) -> pd.DataFrame:
+        if self.source_type == "csv":
+            return self._load_csv()
+        else:
+            raise ValueError(f"Unsupported source_type: {self.source_type}")
 
-    Args:
-        csv_path (str): Path to the CSV file.
+    def _load_csv(self) -> pd.DataFrame:
+        if not os.path.exists(self.source):
+            raise FileNotFoundError(f"File not found: {self.source}")
+        
+        logger.info(f"Loading CSV from {self.source}")
+        df = pd.read_csv(self.source, delimiter=";", index_col=0)
 
-    Returns:
-        pd.DataFrame: Cleaned and processed DataFrame.
-    """
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"File not found: {csv_path}")
+        if 'label' not in df.columns or 'video_name' not in df.columns:
+            raise ValueError("Missing required columns: 'label' and/or 'video_name'")
 
-    df = pd.read_csv(csv_path, delimiter=";", index_col=0)
-    df.dropna(inplace=True)
+        df.dropna(inplace=True)
+        df['is_theft'] = df['label'].isin(self.theft_labels).astype(int)
+        df['camera_id'] = df['video_name'].str.extract(r'camera_(\d+)_ip')
 
-    df['is_theft'] = df['label'].isin(THEFT_LABELS).astype(int)
-    df['camera_id'] = df['video_name'].str.extract(r'camera_(\d+)_ip')
+        if df['camera_id'].isnull().any():
+            logger.warning("Some rows had missing or unparsable camera_id values.")
 
-    return df
+        return df
 
 
 
@@ -367,7 +487,8 @@ import json
 import numpy as np
 import logging
 from datetime import datetime
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score, precision_recall_curve
+import optuna
 
 from .base_models import BaseCameraModel
 
@@ -380,7 +501,7 @@ class CameraModel(BaseCameraModel):
     to classify theft events using a selected optimization strategy with included persistence.
     """
 
-    def fit(self, X, y, method="cost", nrb_steps=2000, verbose=True):
+    def fit(self, X, y, method="cost", verbose=True):
         """
         Fit camera prediction model by selecting an optimal threshold based on prediction scores and labels.
 
@@ -388,7 +509,7 @@ class CameraModel(BaseCameraModel):
             - 'cost': Minimizes true positives lost per false positive saved.
                 Optional kwargs:
                     - steps (int): Number of thresholds to evaluate (default: 500)
-            - 'greedy': Greedily increases threshold to reduce cost until no further improvement.
+            - 'optuna': Greedily increases threshold to reduce cost until no further improvement.
                 Optional kwargs:
                     - steps (int): Number of thresholds to evaluate (default: 500)
 
@@ -409,9 +530,9 @@ class CameraModel(BaseCameraModel):
         self.baseline_tp, self.baseline_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if method == "cost":
-            best_th = self._fit_cost(X, y, steps=nrb_steps)
-        elif method == "greedy":
-            best_th = self._fit_greedy(X, y, steps=nrb_steps)
+            best_th = self._fit_cost(X, y)
+        elif method == "optuna":
+            best_th = self._fit_optuna(X, y, n_trials=50)
         else:
             raise ValueError(f"Unknown optimization method: {method}")
 
@@ -425,29 +546,35 @@ class CameraModel(BaseCameraModel):
         self.updated_at = datetime.now()
 
         if verbose:
-            logger.info(f"Finished fitting camera {self.camera_id}")
-            logger.debug(f" - Best threshold: {self.threshold:.4f}")
-            logger.debug(f" - TP lost: {self.tp_lost}")
-            logger.debug(f" - FP saved: {self.fp_saved}")
-            logger.debug(f" - Cost ratio: {self.cost_ratio:.4f}")
+            logger.info(
+                f"Fitted camera {self.camera_id[:-5]}. "
+                f"Optimal th: {round(self.threshold, 4)}. "
+                f"FP saved: {self.fp_saved}, TP lost: {self.tp_lost}"
+            )
 
     def _compute_cost_ratio(self, tp_lost, fp_saved):
         """Compute the cost as true positives lost per false positive saved."""
         return float("inf") if fp_saved <= 0 else tp_lost / (fp_saved + 1e-8)
 
-    def _fit_cost(self, X, y, steps=500):
+    def _fit_cost(self, X, y):
         """Grid search for optimal threshold minimizing TP lost / FP saved."""
-        thresholds = np.linspace(0, 1, steps)
-        base_tp, base_fp = self.baseline_tp, self.baseline_fp
+        base_tp, base_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if base_fp == 0 or base_tp == 0:
             return self.threshold
 
+        precision, recall, thresholds = precision_recall_curve(y, X)
+        total_pos = np.sum(y)
+
         best_score = np.inf
         best_th = self.threshold
 
-        for th in thresholds:
-            tp, fp = self._compute_tp_fp(X, y, threshold=th)
+        for i in range(len(thresholds)):
+            tp = recall[i] * total_pos
+
+            # invert precision = TP / (TP + FP) to get FP
+            fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
+
             delta_tp = base_tp - tp
             delta_fp = base_fp - fp
 
@@ -455,40 +582,27 @@ class CameraModel(BaseCameraModel):
                 continue
 
             cost = delta_tp / (delta_fp + 1e-8)
-            if cost < best_score or (cost == best_score and th > best_th):
+            if cost < best_score or (cost == best_score and thresholds[i] > best_th):
                 best_score = cost
-                best_th = th
+                best_th = thresholds[i]
 
         return best_th
 
-    def _fit_greedy(self, X, y, steps=500):
-        """Greedily increase threshold to reduce cost until no further gain."""
-        thresholds = np.linspace(0, 1, steps)
+    def _fit_optuna(self, X, y, n_trials=100):
         base_tp, base_fp = self.baseline_tp, self.baseline_fp
 
-        if base_fp == 0 or base_tp == 0:
-            return self.threshold
-
-        best_th = self.threshold
-        best_cost = float("inf")
-
-        for th in thresholds:
-            tp, fp = self._compute_tp_fp(X, y, threshold=th)
+        def objective(trial):
+            threshold = trial.suggest_float("threshold", 0.0, 1.0)
+            tp, fp = self._compute_tp_fp(X, y, threshold)
             delta_tp = base_tp - tp
             delta_fp = base_fp - fp
-
             if delta_fp <= 0:
-                continue
+                return float("inf")
+            return delta_tp / (delta_fp + 1e-8)
 
-            cost = self._compute_cost_ratio(delta_tp, delta_fp)
-
-            if cost < best_cost:
-                best_cost = cost
-                best_th = th
-            else:
-                break
-
-        return best_th
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=n_trials)
+        return study.best_params["threshold"]
 
     def _apply_threshold(self, X, threshold):
         """Apply binary threshold to scores."""
@@ -506,15 +620,15 @@ class CameraModel(BaseCameraModel):
         if not self._fitted:
             raise RuntimeError("Model must be fit before reporting gain.")
         return {
-            "baseline_tp": self.baseline_tp,
-            "baseline_fp": self.baseline_fp,
-            "optimal_tp": self.optimal_tp,
-            "optimal_fp": self.optimal_fp,
-            "tp_lost": self.tp_lost,
-            "fp_saved": self.fp_saved,
-            "threshold": self.threshold,
+            "baseline_tp": int(self.baseline_tp),
+            "baseline_fp": int(self.baseline_fp),
+            "optimal_tp": int(self.optimal_tp),
+            "optimal_fp": int(self.optimal_fp),
+            "tp_lost": int(self.tp_lost),
+            "fp_saved": int(self.fp_saved),
+            "threshold": float(self.threshold),
             "cost_method": self.optim_method,
-            "cost_ratio": self.cost_ratio
+            "cost_ratio": float(self.cost_ratio)
         }
 
     def predict(self, X):
@@ -594,6 +708,7 @@ class CameraModel(BaseCameraModel):
 ================================================
 File: optimizer/viz_utils.py
 ================================================
+
 
 
 
