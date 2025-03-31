@@ -67,7 +67,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         """
         assert strategy in ["naive", "smart"], "Strategy must be either 'naive' or 'smart'"
 
-        logger.info(f"Running {strategy} optimization for all cameras")
+        logger.info(f"Running {strategy} optimization...")
 
         if strategy == "naive":
             self._naive_run(target_fp_reduction)
