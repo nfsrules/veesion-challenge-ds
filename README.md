@@ -4,7 +4,7 @@ This is my solution to the Data Science technical test. For maintenability and b
 
 
 ## Directory Structure
-<pre> ```text version-challenge-ds/ ├── README.md # Project overview and instructions ├── main.py # Command-line script for Q3 and Q4 ├── requirements.txt # Dependencies ├── data/ # Input dataset (not included) ├── optimizer/ │ ├── __init__.py │ ├── base_models.py # Abstract base classes for camera and multi-camera optimizers │ ├── global_optim.py # Multi-camera optimization (Q3) │ ├── io_utils.py # Functions to load the dataset │ └── local_optim.py # Single-camera optimization model (Q3) ├── results/ # Optimization results ├── tests/ # Unit tests (out of scope due to time constraints) └── __init__.py ``` </pre>
+```text version-challenge-ds/ ├── README.md # Project overview and instructions ├── main.py # Command-line script for Q3 and Q4 ├── requirements.txt # Dependencies ├── data/ # Input dataset (not included) ├── optimizer/ │ ├── __init__.py │ ├── base_models.py # Abstract base classes for camera and multi-camera optimizers │ ├── global_optim.py # Multi-camera optimization (Q3) │ ├── io_utils.py # Functions to load the dataset │ └── local_optim.py # Single-camera optimization model (Q3) ├── results/ # Optimization results ├── tests/ # Unit tests (out of scope due to time constraints) └── __init__.py ``` 
 
 ## Answers
 
@@ -29,9 +29,9 @@ This is my solution to the Data Science technical test. For maintenability and b
 - **Task**: Prepare the script for deployment with flexible data sources, command-line execution, and single-camera support.
 - **Implementation**: 
   - **CLI**: `main.py` using `argparse` for CL execution at multi and single camera level.
+  - **Loging**: Added basic loging support.
   - **Data Source**: `optimizer/io_utils.py` includes a `DataLoader` class (support only CSV now for lack of time).
-  - **Output**: Stateless camera and multi camera optimization classes with easy serializable JSON results `--save_path`.
-
+  - **Outputs**: Stateless camera and multi camera optimization classes with easy serializable JSON results `--save_path`. This make easier the future use of DBs (i.e., MongoDB, firestore, supabase...)
   - **Running the solution**:
         `python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 100`
 
