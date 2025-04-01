@@ -35,14 +35,14 @@ It includes:
 The goal: Given a target reduction in total false positives (#FP),
 find a threshold configuration across all cameras that minimizes the loss of true positives (#TP).
 
-A) **Greedy Optimization (naive implementation)**:
+**A) Greedy Optimization (naive implementation)**:
 
 For a target 50% un FP reduction run:
 
 `python main.py --source data/production_alerts_meta_data.csv --target_fp_reduction 0.9 --strategy greedy  --save_path results/greedy_optim_50.json`
 
 
-B) **Global Optimization (linear programming formulation solved using `PuLP` library)**:
+**B) Global Optimization (linear programming formulation solved using `PuLP` library)**:
 
 For a target 50% un FP reduction run:
 
