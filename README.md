@@ -16,6 +16,7 @@ It includes:
 1. Create and activate a virtual environment:
 
    `python -m venv veesion-challenge-venv`
+   
    `source veesion-challenge-venv/bin/activate`
 
 
