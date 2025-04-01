@@ -23,9 +23,13 @@ class BaseCameraModel(ABC):
         pass
 
     @abstractmethod
-    def predict(self, X):
+    def eval(self, X, y):
         pass
 
+    @abstractmethod
+    def predict(self, X):
+        pass
+    
     @abstractmethod
     def save(self, path):
         pass

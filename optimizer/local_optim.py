@@ -4,7 +4,7 @@ import numpy as np
 import logging
 from datetime import datetime
 from sklearn.metrics import precision_score, recall_score, f1_score, precision_recall_curve
-import optuna
+
 
 from .base_models import BaseCameraModel
 
@@ -84,9 +84,8 @@ class CameraModel(BaseCameraModel):
         best_th = self.threshold
 
         for i, th in enumerate(thresholds):
-            tp = recall[i] * total_pos
-
-            # Invert precision to get FP estimate
+            
+            tp = recall[i + 1] * total_pos
             fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
 
             delta_tp = base_tp - tp
@@ -164,6 +163,55 @@ class CameraModel(BaseCameraModel):
             return f1_score(y, preds, zero_division=0)
         else:
             raise ValueError(f"Unsupported metric: {metric}")
+
+    def eval(self, X, y, threshold=None, verbose=True):
+        """
+        Evaluate a given threshold (or the fitted one) on data and return TP/FP stats.
+
+        Args:
+            X (np.ndarray): Prediction scores.
+            y (np.ndarray): Ground-truth labels.
+            threshold (float): Optional threshold to evaluate. Defaults to self.threshold.
+            verbose (bool): Whether to log evaluation summary.
+
+        Returns:
+            dict: Evaluation result with TP, FP, TP lost, FP saved, etc.
+        """
+        if threshold is None:
+            if not self._fitted:
+                raise RuntimeError("No threshold provided and model is not fitted.")
+            threshold = self.threshold
+
+        eval_tp, eval_fp = self._compute_tp_fp(X, y, threshold)
+
+        if self._fitted:
+            base_tp, base_fp = self.baseline_tp, self.baseline_fp
+        else:
+            base_tp, base_fp = self._compute_tp_fp(X, y, threshold=0.0)
+
+        tp_lost = base_tp - eval_tp
+        fp_saved = base_fp - eval_fp
+
+        result = {
+            "store": self.store,
+            "camera_id": self.camera_id,
+            "threshold": float(threshold),
+            "baseline_tp": int(base_tp),
+            "baseline_fp": int(base_fp),
+            "eval_tp": int(eval_tp),
+            "eval_fp": int(eval_fp),
+            "tp_lost": int(tp_lost),
+            "fp_saved": int(fp_saved)
+        }
+
+        if verbose:
+            logger.info(
+                f"Evaluated camera {self.camera_id}. "
+                f"Threshold: {round(threshold, 4)}. "
+                f"FP saved: {fp_saved}, TP lost: {tp_lost}"
+            )
+
+        return result
 
     def to_dict(self):
         """Serialize model to dictionary."""
