@@ -154,7 +154,17 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         total_fp_at_0 = (self.df["is_theft"] == 0).sum()
         self.target_fp_reduction = target_fp_reduction * total_fp_at_0
 
-        weights = [0.0001, 0.05, 0.1, 0.5]
+        # To reduce the complexity, I've empirically found 
+        # a range of weights that make sense for different strategies (more agressive, to conservative).
+        # This of course can change depending on the data.
+        if target_fp_reduction >= 0.20:
+            selected_weight = 0.0001 
+        elif target_fp_reduction >= 0.15:
+            selected_weight = 0.05 
+        elif target_fp_reduction >= 0.10:
+            selected_weight = 0.1
+        else:
+            selected_weight = 0.5
 
         priority_list = sorted(
             self.grouped.groups.keys(),
@@ -166,7 +176,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 break
 
             group = self.grouped.get_group((store, cam_id))
-            best_info = self._select_best_weight(store, cam_id, group, weights, method)
+            best_info = self._select_best_weight(store, cam_id, group, [selected_weight], method)
 
             if best_info:
                 self.cameras_info.append(best_info)
