@@ -61,6 +61,8 @@ For a target 50% un FP reduction run:
 | 70%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.1130s | TP Lost: 334 / 1601 <br> FP Saved: 108047 / 154336 <br> Time: 0.1720s |
 | 90%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.1156s | TP Lost: 742 / 1601 <br> FP Saved: 138927 / 154336 <br> Time: 0.1844s |
 
+### Note: You can choose the target FP reduction in % that makes more sense in the tradeoff FP saved and TP missed!
+
 
 ---------------------------------------------------
 ### Question 4: Deployment-ready Execution
@@ -70,7 +72,7 @@ This script supports running optimization for a **single camera**, simulating a 
 
 You can run one camera optimization like this:
 
-`!python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 0.5 --strategy global --save_path results/camera_optim_global_150.json`
+`!python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 0.5 --strategy global --save_path results/camera_optim_global_50.json`
 
 
 The complete response is in the notebook: `answers.ipynb`
