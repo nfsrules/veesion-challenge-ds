@@ -155,6 +155,7 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         self.target_fp_reduction = target_fp_reduction * total_fp_at_0
 
         weights = [0.0001, 0.05, 0.1, 0.5]
+
         priority_list = sorted(
             self.grouped.groups.keys(),
             key=lambda key: -((self.grouped.get_group(key)["is_theft"] == 0).sum())
