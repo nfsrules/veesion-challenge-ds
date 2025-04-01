@@ -91,6 +91,36 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 best_tp_lost = cam_info["tp_lost"]
 
         return best_info
+    
+    def _unpack_lp_solution(self, x, threshold_data, num_thresholds, verbose):
+        for i in range(len(threshold_data)):
+            for k in range(num_thresholds):
+                if x[i][k].varValue > 0.5:
+                    store = threshold_data[i]["store"]
+                    cam_id = threshold_data[i]["cam_id"]
+                    threshold = threshold_data[i]["thresholds"][k]
+                    fp_saved = threshold_data[i]["fp_red"][k]
+                    tp_lost = threshold_data[i]["tp_red"][k]
+
+                    cam_info = {
+                        "store": store,
+                        "camera_id": cam_id,
+                        "threshold": float(threshold),
+                        "fp_saved": int(fp_saved),
+                        "tp_lost": int(tp_lost)
+                    }
+
+                    self.cameras_info.append(cam_info)
+                    self.selected.append(cam_id)
+                    self.total_fp_saved += fp_saved
+                    self.total_tp_lost += tp_lost
+
+                    if verbose:
+                        logger.info(
+                            f"Fitted camera {cam_id}. Optimal th: {round(threshold, 4)}. "
+                            f"FP saved: {fp_saved}, TP lost: {tp_lost}"
+                        )
+                    break
 
     def _log_summary(self, title, total_fp, total_tp, elapsed):
         logger.info(
@@ -146,36 +176,6 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 self.skipped.append((store, cam_id))
 
         self._log_summary("Lazy Greedy Optimization Summary", total_fp_at_0, total_tp_at_0, time.time() - start_time)
-
-    def _unpack_lp_solution(self, x, threshold_data, num_thresholds, verbose):
-        for i in range(len(threshold_data)):
-            for k in range(num_thresholds):
-                if x[i][k].varValue > 0.5:
-                    store = threshold_data[i]["store"]
-                    cam_id = threshold_data[i]["cam_id"]
-                    threshold = threshold_data[i]["thresholds"][k]
-                    fp_saved = threshold_data[i]["fp_red"][k]
-                    tp_lost = threshold_data[i]["tp_red"][k]
-
-                    cam_info = {
-                        "store": store,
-                        "camera_id": cam_id,
-                        "threshold": float(threshold),
-                        "fp_saved": int(fp_saved),
-                        "tp_lost": int(tp_lost)
-                    }
-
-                    self.cameras_info.append(cam_info)
-                    self.selected.append(cam_id)
-                    self.total_fp_saved += fp_saved
-                    self.total_tp_lost += tp_lost
-
-                    if verbose:
-                        logger.info(
-                            f"Fitted camera {cam_id}. Optimal th: {round(threshold, 4)}. "
-                            f"FP saved: {fp_saved}, TP lost: {tp_lost}"
-                        )
-                    break
 
     def _global_run(self, target_fp_reduction: float, verbose=True):
         start_time = time.time()
