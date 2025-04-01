@@ -1,6 +1,7 @@
 Directory structure:
 └── veesion-challenge-ds/
     ├── README.md
+    ├── answers.ipynb
     ├── main.py
     ├── requirements.txt
     ├── data/
@@ -12,7 +13,6 @@ Directory structure:
     │   ├── local_optim.py
     │   ├── viz_utils.py
     │   └── __pycache__/
-    ├── results/
     └── tests/
         └── __init__.py
 
@@ -60,6 +60,614 @@ This is my solution to the Data Science technical test. For maintenability and b
 1. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
+
+
+================================================
+File: answers.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# Veesion Data Science Challenge
+Nelson Fernandez 
+
+### Context
+Veesion delivers a full AI video analytics solution for detecting shoplifting, serving clients in over 40 countries. What makes Veesion different to other companies is that their AI model plugs into the existing DRVs and IP cameras of the clients reducing the set up costs. As a consequence, Veesion's AI action recognition model must robustly handle videos of different qualities, across a wide range of environments, traffic levels, and event types.
+
+### Goal
+To provide an excellent quality of service, the Veesion AI team aims to minimize the number of false alerts while missing as few theft events as possible. Achieving this balance is essential for delivering strong ROI to clients and maintaining operator trust in the system.
+
+### Scope
+* As this is a 3h excercise, I'll code the most essential parts of the system, and provide recommendations for a follow up.
+* I'll keep my code as suitable as possible for deployment: Modular and maintainable with classes & base models, stateles (ideal for persitance and interacting with different data inputs) and an easy CLI calling with basic loggin.
+* I'll assume that all thefts were detected and are available in the provided event .CSV.
+* ⚠️  I'll treat the clearly multi-class classification outputs as binary, even though this would **skyrocket the number of #FP** in a production environment.
+
+"""
+
+"""
+___
+#### Question 1: Plot the #FP = f(Recall) curve for each camera for which we have alerts in this CSV.
+
+"""
+
+import os
+
+from optimizer.io_utils import DataLoader
+from optimizer.viz_utils import save_fp_recall_plots
+
+data_path = os.path.join('data', 
+                         'production_alerts_meta_data.csv'
+            )
+
+# Let's open the original dataframe.
+# This function extracts the camera_id's and maps the theft labels as theft and generates a binary 'is_theft' collumn.
+df = DataLoader(data_path, source_type="csv").load()
+
+num_stores = df['store'].nunique()
+num_cameras = df.groupby(['store', 'camera_id']).ngroups
+num_theft_events = df['is_theft'].sum()
+num_non_theft_events = (df['is_theft'] == 0).sum()
+
+# Le's print some basic stats of the dataset
+print(
+    f"Summary: "
+    f"Number of unique videos: {num_stores}, "
+    f"Number of unique cameras: {num_cameras}, "
+    f"Theft events: {num_theft_events}, "
+    f"Non-theft events: {num_non_theft_events}"
+)
+
+# Now let's export the FP = f(recall) plots for each pair store, camera.
+# For writting this function I've used sklearn's precision_recall_curve and tracked #FP
+# using (probability >= th).astype(int) and comparing to the 'true' value  'is_theft'.
+# The results are stored in 'plots/store_camera_id.png'
+save_fp_recall_plots(df, output_dir="plots/")
+# Output:
+#   /Users/nfsrules/Documents/veesion/challenge-veesion/challenge-veesion-venv/lib/python3.12/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
+
+#     from .autonotebook import tqdm as notebook_tqdm
+
+#   Summary: Number of unique videos: 45, Number of unique cameras: 45, Theft events: 1601, Non-theft events: 154336
+
+
+"""
+___
+#### Question 2: What can you deduce about the model's uniformness across these cameras?
+"""
+
+from optimizer.viz_utils import display_fp_vs_recall_grid
+
+# Let's display the FP = f(recall) plots inline to discuss on them.
+# I've removed cameras with no theft evens tas the recall is undefined
+display_fp_vs_recall_grid(df, max_cols=5)
+
+# Output:
+#   <Figure size 2000x2400 with 40 Axes>
+
+"""
+#### Key considerations:
+1) Ideally we want the recall to be the highest possible as we do not want to miss any theft (x-axis). Nevertheless, high recall is paid expensively with #FPs that can go up to 10K for the most active cameras (y-axis)!
+
+2) As consequence of the point (1) the overal model quality for that camera is related to the AUC, so flatter-curves are better. A good example is the bottom right curve (right uk-wil-l11lk-jhons-112) which has a flat slope most of the plot.
+
+3) Some camerals produce a lot of #FP! (see top left second position be-carr-1030-plasky-88) we could benefit of these cases when doing global optimization.
+
+4) Some curves are step-like, this is due to a relativelly small amount of theft events. More the number of events, the more smooth the curves are.
+
+5) Of course, not all cameras produce the same amount of events, so we could benefit of normalization. Nevertheless, I'll keep it as it is, to focus at the client level.
+
+
+#### Conclusion: 
+   The model performance varies a lot depending on the camera, in some it is very good (uk-wil-l11lk-jhons-112) in others very bad (be-carr-1030-plasky-88). Also the number of theft events and #FP varies a lot. This means that we need for **camera level threshold management** to ensure quality of service. In other words, one threshold does not fit for all cameras.
+"""
+
+"""
+___
+### Question 3: Optimization
+
+Let's agree that, without a particular choice of threshold, the default threshold is 0. Choosing a threshold higher than 0 for a camera thus has the effect of lowering its #FP and #TP. 
+
+Let's call the total #FP the sum of the #FP for each camera in the data, and the total #TP the sum of the #TP for each camera. Find a combination of thresholds for all the cameras that, given a target reduction of total #FP, minimizes the reduction of total #TP.
+"""
+
+"""
+### A) Simple Greedy Optimization
+
+This solution uses a simple Knapsack-like problem formulation, where:
+
+- **Camera weight** is proportional to its total number of non-theft events (i.e., cameras likely to produce a high number of false positives).
+- **Optimization is done at the camera level**, using a cost function that minimizes the number of true positives (TP) lost for a given amount of false positives (FP) saved. I'we added a weight parameter to have more control of the optimization, and I've found some typical values empirically.
+- The optimization is **greedy**, iterating through camera objects and **early stopping** once the target FP reduction is achieved.
+
+#### Drawbacks
+
+- Greedy optimization is **local** and may **miss global minima**.
+- Despite the code being efficient, there are **practical scalability limits**.
+
+#### Relevant Implementation
+
+- `_greedy_run` in `optimizers/global_optim.py`
+- `_fit_cost` in `optimizers/local_optim.py`
+
+"""
+
+# Before running make sure you have exported the local virtual env to Jupyter or simply run this in command line
+# --target_fp_reduction is the expected reduction in % of total false positives (e.g. 0.5 = 50%)
+
+!python main.py --source data/production_alerts_meta_data.csv --target_fp_reduction 0.9 --strategy greedy  --save_path results/greedy_optim_50.json
+# Output:
+#   2025-04-01 09:37:34,503 [INFO] optimizer.io_utils - Loading CSV from data/production_alerts_meta_data.csv
+
+#   2025-04-01 09:37:34,715 [INFO] root - Running optimization for all cameras
+
+#   2025-04-01 09:37:34,715 [INFO] optimizer.global_optim - Running greedy optimization...
+
+#   2025-04-01 09:37:34,831 [INFO] optimizer.global_optim - 
+
+#   [Lazy Greedy Optimization Summary]
+
+#   Target FP reduction : 138902
+
+#   Total FP saved      : 32031 / 154336
+
+#   Total TP lost       : 74 / 1601
+
+#   Used                : 39 cameras
+
+#   Skipped             : 12 cameras
+
+#   Total optimization time: 0.1156 seconds
+
+#   2025-04-01 09:37:34,832 [INFO] root - Saved optimizer state to results/greedy_optim_50.json
+
+
+"""
+### B) Global Optimization
+
+For this solution, I've used [`pulp`](https://coin-or.github.io/pulp/) library that contains several out-of-the-box optimization methods:
+
+- We formulate the optimization as a **Linear Program**, minimizing total true positives (TP) lost while achieving a target false positive (FP) reduction.
+- Each camera has a set of candidate thresholds, evaluated for their impact on TP and FP.
+- The model selects **exactly one threshold per camera**, subject to:
+  - A minimum global FP reduction.
+  - A cost function that sums the TP lost.
+
+The solver returns the optimal combination of thresholds across all cameras.
+
+#### Drawbacks
+
+- LP-based optimization is **slower and more complex**, especially as the number of cameras or thresholds grows.
+- Requires a **solver backend** and may occasionally fail to converge in edge cases.
+
+#### Relevant Implementation
+
+- `_global_run` in `optimizers/global_optim.py`
+
+"""
+
+# Before running make sure you have exported the local virtual env to Jupyter or simply run this in command line
+# --target_fp_reduction is the expected reduction in % of total false positives (e.g. 0.5 = 50%)
+!python main.py --source data/production_alerts_meta_data.csv --target_fp_reduction 0.5 --strategy global  --save_path results/global_optim_50.json
+# Output:
+#   2025-04-01 09:07:27,669 [INFO] optimizer.io_utils - Loading CSV from data/production_alerts_meta_data.csv
+
+#   2025-04-01 09:07:27,884 [INFO] root - Running optimization for all cameras
+
+#   2025-04-01 09:07:27,884 [INFO] optimizer.global_optim - Running global optimization...
+
+#   Welcome to the CBC MILP Solver 
+
+#   Version: 2.10.3 
+
+#   Build Date: Dec 15 2019 
+
+#   
+
+#   command line - /Users/nfsrules/Documents/veesion/challenge-veesion/challenge-veesion-venv/lib/python3.12/site-packages/pulp/apis/../solverdir/cbc/osx/i64/cbc /var/folders/18/nttsfxg1575cmsthfsmgfkf40000gn/T/ea1163a836fd4897a52f0485a666cd26-pulp.mps -timeMode elapsed -branch -printingOptions all -solution /var/folders/18/nttsfxg1575cmsthfsmgfkf40000gn/T/ea1163a836fd4897a52f0485a666cd26-pulp.sol (default strategy 1)
+
+#   At line 2 NAME          MODEL
+
+#   At line 3 ROWS
+
+#   At line 51 COLUMNS
+
+#   At line 10714 RHS
+
+#   At line 10761 BOUNDS
+
+#   At line 13012 ENDATA
+
+#   Problem MODEL has 46 rows, 2250 columns and 4489 elements
+
+#   Coin0008I MODEL read with 0 errors
+
+#   Option for timeMode changed from cpu to elapsed
+
+#   Continuous objective value is 139.841 - 0.00 seconds
+
+#   Cgl0004I processed model has 46 rows, 2203 columns (2203 integer (2203 of which binary)) and 4400 elements
+
+#   Cutoff increment increased from 1e-05 to 0.9999
+
+#   Cbc0038I Initial state - 2 integers unsatisfied sum - 0.315927
+
+#   Cbc0038I Solution found of 143
+
+#   Cbc0038I Before mini branch and bound, 2195 integers at bound fixed and 6 continuous
+
+#   Cbc0038I Full problem 46 rows 2203 columns, reduced to 0 rows 0 columns
+
+#   Cbc0038I Mini branch and bound did not improve solution (0.02 seconds)
+
+#   Cbc0038I Round again with cutoff of 141.784
+
+#   Cbc0038I Reduced cost fixing fixed 1378 variables on major pass 2
+
+#   Cbc0038I Pass   1: suminf.    0.06079 (1) obj. 141.784 iterations 40
+
+#   Cbc0038I Pass   2: suminf.    0.29213 (1) obj. 141.405 iterations 44
+
+#   Cbc0038I Pass   3: suminf.    0.27753 (1) obj. 141.784 iterations 40
+
+#   Cbc0038I Pass   4: suminf.    1.11923 (4) obj. 141.784 iterations 54
+
+#   Cbc0038I Pass   5: suminf.    0.30170 (2) obj. 141.784 iterations 18
+
+#   Cbc0038I Pass   6: suminf.    1.00000 (3) obj. 141.784 iterations 57
+
+#   Cbc0038I Pass   7: suminf.    0.61274 (2) obj. 141.784 iterations 9
+
+#   Cbc0038I Pass   8: suminf.    0.16079 (1) obj. 141.784 iterations 41
+
+#   Cbc0038I Pass   9: suminf.    0.61274 (2) obj. 141.784 iterations 49
+
+#   Cbc0038I Pass  10: suminf.    1.44836 (4) obj. 141.784 iterations 46
+
+#   Cbc0038I Pass  11: suminf.    1.44836 (4) obj. 141.784 iterations 14
+
+#   Cbc0038I Pass  12: suminf.    1.00000 (3) obj. 141.784 iterations 49
+
+#   Cbc0038I Pass  13: suminf.    0.79304 (2) obj. 141.784 iterations 9
+
+#   Cbc0038I Pass  14: suminf.    0.16079 (1) obj. 141.784 iterations 43
+
+#   Cbc0038I Pass  15: suminf.    0.16079 (1) obj. 141.784 iterations 0
+
+#   Cbc0038I Pass  16: suminf.    0.79304 (2) obj. 141.784 iterations 48
+
+#   Cbc0038I Pass  17: suminf.    0.63060 (4) obj. 141.784 iterations 28
+
+#   Cbc0038I Pass  18: suminf.    0.63060 (4) obj. 141.784 iterations 13
+
+#   Cbc0038I Pass  19: suminf.    1.00000 (3) obj. 141.784 iterations 36
+
+#   Cbc0038I Pass  20: suminf.    0.58037 (2) obj. 141.784 iterations 10
+
+#   Cbc0038I Pass  21: suminf.    0.26010 (2) obj. 141.784 iterations 5
+
+#   Cbc0038I Pass  22: suminf.    1.00000 (3) obj. 141.784 iterations 62
+
+#   Cbc0038I Pass  23: suminf.    0.36583 (4) obj. 141.784 iterations 35
+
+#   Cbc0038I Pass  24: suminf.    0.29687 (4) obj. 141.784 iterations 18
+
+#   Cbc0038I Pass  25: suminf.    0.68031 (3) obj. 141.784 iterations 18
+
+#   Cbc0038I Pass  26: suminf.    0.13652 (2) obj. 141.784 iterations 11
+
+#   Cbc0038I Pass  27: suminf.    0.68031 (3) obj. 141.784 iterations 59
+
+#   Cbc0038I Pass  28: suminf.    1.20924 (4) obj. 141.784 iterations 20
+
+#   Cbc0038I Pass  29: suminf.    0.14410 (2) obj. 141.721 iterations 25
+
+#   Cbc0038I Pass  30: suminf.    0.19998 (3) obj. 141.784 iterations 34
+
+#   Cbc0038I No solution found this major pass
+
+#   Cbc0038I Before mini branch and bound, 2150 integers at bound fixed and 4 continuous
+
+#   Cbc0038I Full problem 46 rows 2203 columns, reduced to 9 rows 35 columns
+
+#   Cbc0038I Mini branch and bound improved solution from 143 to 141 (0.05 seconds)
+
+#   Cbc0038I Round again with cutoff of 139.968
+
+#   Cbc0038I Reduced cost fixing fixed 2114 variables on major pass 3
+
+#   Cbc0038I Pass  30: suminf.    0.23325 (2) obj. 139.968 iterations 22
+
+#   Cbc0038I Pass  31: suminf.    0.31593 (2) obj. 139.841 iterations 12
+
+#   Cbc0038I Pass  32: suminf.    1.07804 (4) obj. 139.968 iterations 14
+
+#   Cbc0038I Pass  33: suminf.    0.28099 (2) obj. 139.968 iterations 3
+
+#   Cbc0038I Pass  34: suminf.    0.30722 (2) obj. 139.928 iterations 10
+
+#   Cbc0038I Pass  35: suminf.    0.64501 (4) obj. 139.968 iterations 15
+
+#   Cbc0038I Pass  36: suminf.    0.29053 (2) obj. 139.968 iterations 7
+
+#   Cbc0038I Pass  37: suminf.    0.30548 (2) obj. 139.945 iterations 9
+
+#   Cbc0038I Pass  38: suminf.    0.93302 (4) obj. 139.968 iterations 10
+
+#   Cbc0038I Pass  39: suminf.    0.28815 (2) obj. 139.968 iterations 8
+
+#   Cbc0038I Pass  40: suminf.    0.30592 (2) obj. 139.941 iterations 10
+
+#   Cbc0038I Pass  41: suminf.    0.29053 (2) obj. 139.968 iterations 9
+
+#   Cbc0038I Pass  42: suminf.    0.29053 (2) obj. 139.968 iterations 1
+
+#   Cbc0038I Pass  43: suminf.    0.30548 (2) obj. 139.945 iterations 10
+
+#   Cbc0038I Pass  44: suminf.    1.09899 (4) obj. 139.968 iterations 12
+
+#   Cbc0038I Pass  45: suminf.    1.09899 (4) obj. 139.968 iterations 2
+
+#   Cbc0038I Pass  46: suminf.    0.31549 (2) obj. 139.845 iterations 13
+
+#   Cbc0038I Pass  47: suminf.    0.23564 (2) obj. 139.968 iterations 7
+
+#   Cbc0038I Pass  48: suminf.    0.31549 (2) obj. 139.845 iterations 10
+
+#   Cbc0038I Pass  49: suminf.    0.74471 (4) obj. 139.968 iterations 19
+
+#   Cbc0038I Pass  50: suminf.    0.29053 (2) obj. 139.968 iterations 5
+
+#   Cbc0038I Pass  51: suminf.    0.30548 (2) obj. 139.945 iterations 9
+
+#   Cbc0038I Pass  52: suminf.    0.86090 (4) obj. 139.968 iterations 6
+
+#   Cbc0038I Pass  53: suminf.    0.53705 (4) obj. 139.968 iterations 4
+
+#   Cbc0038I Pass  54: suminf.    0.42011 (4) obj. 139.968 iterations 6
+
+#   Cbc0038I Pass  55: suminf.    0.30809 (2) obj. 139.919 iterations 10
+
+#   Cbc0038I Pass  56: suminf.    0.27621 (2) obj. 139.968 iterations 6
+
+#   Cbc0038I Pass  57: suminf.    0.30809 (2) obj. 139.919 iterations 9
+
+#   Cbc0038I Pass  58: suminf.    0.86165 (4) obj. 139.968 iterations 15
+
+#   Cbc0038I Pass  59: suminf.    0.86165 (4) obj. 139.968 iterations 4
+
+#   Cbc0038I No solution found this major pass
+
+#   Cbc0038I Before mini branch and bound, 2175 integers at bound fixed and 4 continuous
+
+#   Cbc0038I Mini branch and bound did not improve solution (0.07 seconds)
+
+#   Cbc0038I After 0.07 seconds - Feasibility pump exiting with objective of 141 - took 0.04 seconds
+
+#   Cbc0012I Integer solution of 141 found by feasibility pump after 0 iterations and 0 nodes (0.07 seconds)
+
+#   Cbc0012I Integer solution of 140 found by DiveCoefficient after 0 iterations and 0 nodes (0.07 seconds)
+
+#   Cbc0001I Search completed - best objective 140, took 0 iterations and 0 nodes (0.07 seconds)
+
+#   Cbc0035I Maximum depth 0, 2163 variables fixed on reduced cost
+
+#   Cuts at root node changed objective from 139.841 to 139.841
+
+#   Probing was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   Gomory was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   Knapsack was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   Clique was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   MixedIntegerRounding2 was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   FlowCover was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   TwoMirCuts was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   ZeroHalf was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+#   
+
+#   Result - Optimal solution found
+
+#   
+
+#   Objective value:                140.00000000
+
+#   Enumerated nodes:               0
+
+#   Total iterations:               0
+
+#   Time (CPU seconds):             0.05
+
+#   Time (Wallclock seconds):       0.07
+
+#   
+
+#   Option for printingOptions changed from normal to all
+
+#   Total time (CPU seconds):       0.06   (Wallclock seconds):       0.08
+
+#   
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 10. Optimal th: 0.2245. FP saved: 509, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 6. Optimal th: 0.0. FP saved: 4, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 13. Optimal th: 0.0408. FP saved: 106, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 12. Optimal th: 0.7959. FP saved: 2982, TP lost: 9
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 25. Optimal th: 0.0. FP saved: 3, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 22. Optimal th: 0.8367. FP saved: 897, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 6. Optimal th: 1.0. FP saved: 6261, TP lost: 24
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 17. Optimal th: 0.8163. FP saved: 2058, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 14. Optimal th: 0.0408. FP saved: 249, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 7. Optimal th: 0.0612. FP saved: 113, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 3. Optimal th: 0.3265. FP saved: 1011, TP lost: 2
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 215. Optimal th: 0.551. FP saved: 272, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 7. Optimal th: 0.2857. FP saved: 1929, TP lost: 5
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 12. Optimal th: 0.0204. FP saved: 41, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 11. Optimal th: 0.4694. FP saved: 2136, TP lost: 8
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 9. Optimal th: 0.102. FP saved: 16, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 1. Optimal th: 0.2449. FP saved: 2187, TP lost: 6
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 11. Optimal th: 0.0. FP saved: 2, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 122. Optimal th: 0.898. FP saved: 4, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 4. Optimal th: 0.0. FP saved: 2, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 163. Optimal th: 1.0. FP saved: 12552, TP lost: 11
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 127. Optimal th: 0.0612. FP saved: 66, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 121. Optimal th: 0.0. FP saved: 2, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 33. Optimal th: 0.0. FP saved: 3, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 17. Optimal th: 1.0. FP saved: 420, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 19. Optimal th: 1.0. FP saved: 1609, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 49. Optimal th: 1.0. FP saved: 1015, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 59. Optimal th: 0.5102. FP saved: 2071, TP lost: 7
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 61. Optimal th: 0.7755. FP saved: 192, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 23. Optimal th: 0.0612. FP saved: 203, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 22. Optimal th: 1.0. FP saved: 9269, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 3. Optimal th: 0.0. FP saved: 0, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 114. Optimal th: 0.6531. FP saved: 2890, TP lost: 10
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 1. Optimal th: 0.1224. FP saved: 608, TP lost: 2
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 8. Optimal th: 0.9388. FP saved: 6720, TP lost: 21
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 185. Optimal th: 1.0. FP saved: 358, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 25. Optimal th: 0.7143. FP saved: 901, TP lost: 2
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 6. Optimal th: 1.0. FP saved: 1305, TP lost: 1
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 5. Optimal th: 0.3061. FP saved: 944, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 5. Optimal th: 0.0816. FP saved: 300, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 13. Optimal th: 0.6327. FP saved: 3795, TP lost: 7
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 13. Optimal th: 0.7755. FP saved: 5015, TP lost: 20
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 4. Optimal th: 0.5714. FP saved: 767, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 65. Optimal th: 1.0. FP saved: 1750, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - Fitted camera 23. Optimal th: 1.0. FP saved: 3644, TP lost: 0
+
+#   2025-04-01 09:07:28,131 [INFO] optimizer.global_optim - 
+
+#   [Optimal LP Optimization Summary]
+
+#   Target FP reduction : 77168
+
+#   Total FP saved      : 77181 / 154336
+
+#   Total TP lost       : 140 / 1601
+
+#   Used                : 45 cameras
+
+#   Skipped             : 0 cameras
+
+#   Total optimization time: 0.2476 seconds
+
+#   2025-04-01 09:07:28,132 [INFO] root - Saved optimizer state to results/global_optim_50.json
+
+
+"""
+### Q3: Comparision of Optimization Methods
+
+
+| Target FP Reduction (%) | Greedy Optimization                                      | Global Optimization                                      |
+|--------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| 10%                      | TP Lost: 5 / 1601  <br> FP Saved: 15169 / 154336  <br> Time: 0.1163s | TP Lost: 0 / 1601  <br> FP Saved: 17917 / 154336  <br> Time: 0.1634s |
+| 20%                      | TP Lost: 72 / 1601 <br> FP Saved: 31417 / 154336  <br> Time: 0.1125s | TP Lost: 7 / 1601  <br> FP Saved: 30895 / 154336  <br> Time: 0.2279s |
+| 30%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.6079s | TP Lost: 28 / 1601 <br> FP Saved: 46329 / 154336  <br> Time: 0.2061s |
+| 50%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.1137s | TP Lost: 140 / 1601 <br> FP Saved: 77181 / 154336 <br> Time: 0.1905s |
+| 70%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.1130s | TP Lost: 334 / 1601 <br> FP Saved: 108047 / 154336 <br> Time: 0.1720s |
+| 90%                      | TP Lost: 74 / 1601 <br> FP Saved: 32031 / 154336  <br> Time: 0.1156s | TP Lost: 742 / 1601 <br> FP Saved: 138927 / 154336 <br> Time: 0.1844s |
+
+
+
+### Conclusions
+
+- Without surprise, **Greedy performs worse** than Global Optimization, especially at higher target FP reduction as it is unable to find global minimum.
+- Greddy caps to a maximum of 74 TP lost, this mean that it is unable to negociate bigger TP cost, to globally achieve the target FP reduction.
+- **Global Optimization scales beautifully**, as it finds the right thresholds to meet the FP reduction targets, while minimizing the FP loss.
+- Despite the complexity, **Global remains fast**, staying under 0.25s even at 90% reduction — making it practical for batch optimization use cases. Nevertheless, this is not guarantee at scale, we'll need to do more tests with real production data.
+"""
+
+"""
+___
+#### Question 4: Deployment  
+It is not known yet exactly how this script will be deployed, however it is sure that:
+
+- **The data source may change from the csv to something else**:  
+     
+     I've created a `DataLoader` class in `optimizers/io_utils.py`. It supports only .CSV files for now with Pandas,  
+     but we can easily extend it to other formats or add connection to databases (i.e., MongoDB, Supabase, etc.)
+
+- **The program is meant to run as a command line script**:  
+
+     I've included CLI command support in `main.py` with argparse. Available params are:  
+     `--source`: Input data CSV file  
+     `--target_fp_reduction`: Target reduction in % of total false positives (e.g. 0.9 = 90%)  
+     `--strategy`: Optimization strategy to use (`greedy` or `global`)  
+
+- **The program should run for a single camera at once only**:  
+
+     I've added a `--store`: store name (str) and `--camera_id`: camera id (int) to support this.  
+     Just run the following command:
+
+"""
+
+# Again make sure the virtual env is exported to Jupyter, otherwise run this in the command line
+!python main.py --source data/production_alerts_meta_data.csv --store be-ad-1420-hugo-3 --camera_id 10 --target_fp_reduction 0.1 --strategy global --save_path results/camera_optim_global_150.json
+
+"""
+- **You need to make your program as ready as possible for these conditions, making the amount of work needed to prepare it for the actual deployment minimal. What would you change in / add to your work in this setting? State explicitly what you plan to do and then implement those changes.**:  
+
+     I've added a `--store`: store name (str) and `--camera_id`: camera id (int) to support this.  
+     Just run the following command:
+"""
+
+"""
+
+- You need to make your program as ready as possible for these conditions, making the amount of work needed to prepare it for the actual deployment minimal.
+
+
+What would you change in / add to your work in this setting? State explicitly what you plan to do and then implement those changes.
+"""
+
 
 
 ================================================
@@ -120,12 +728,12 @@ if __name__ == "__main__":
         help="Type of data source (default: csv)"
     )
     parser.add_argument(
-        "--target_fp_reduction", type=int, default=100,
-        help="Desired number of false positives to reduce globally (default: 100)"
+        "--target_fp_reduction", type=float, default=0.10,
+        help="Desired percentage of false positives to reduce globally (default: 0.20 (20%))"
     )
     parser.add_argument(
-        "--strategy", type=str, choices=["greedy", "lazy"], default="lazy",
-        help="Optimization strategy: 'greedy' or 'lazy'. Default is 'lazy'."
+        "--strategy", type=str, choices=["greedy", "global"], default="lazy",
+        help="Optimization strategy: 'greedy' or 'global'. Default is 'global'."
     )
     parser.add_argument(
         "--store", type=str,
@@ -193,9 +801,13 @@ class BaseCameraModel(ABC):
         pass
 
     @abstractmethod
-    def predict(self, X):
+    def eval(self, X, y):
         pass
 
+    @abstractmethod
+    def predict(self, X):
+        pass
+    
     @abstractmethod
     def save(self, path):
         pass
@@ -237,6 +849,8 @@ File: optimizer/global_optim.py
 import json
 import logging
 import time
+import numpy as np
+from pulp import LpProblem, LpMinimize, LpVariable, lpSum, LpStatus
 
 from .base_models import BaseGlobalOptimizer
 
@@ -249,27 +863,28 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
         self.camera_model_cls = camera_model_cls
         self.verbose = verbose
 
+        self._reset_state()
+        self.target_fp_reduction = None
+        self.grouped = df.groupby(["store", "camera_id"])
+
+        if not self.verbose:
+            logger.setLevel(logging.WARNING)
+
+    def _reset_state(self):
         self.cameras_info = []
         self.selected = []
         self.skipped = []
         self.total_fp_saved = 0
         self.total_tp_lost = 0
-        self.target_fp_reduction = None
 
-        if not self.verbose:
-            logger.setLevel(logging.WARNING)
-
-    def _fit_camera(self, store, cam_id, group, method="cost", verbose=False):
-        """
-        Fit and evaluate a single camera, returning gain info if valid.
-        """
+    def _fit_camera(self, store, cam_id, group, weight, method="cost", verbose=False):
         X = group["probability"].values.astype(float)
         y = group["is_theft"].values
         camera_name = f"{store}_cam{cam_id}"
         camera = self.camera_model_cls(camera_id=camera_name)
 
         try:
-            camera.fit(X, y, method=method, verbose=verbose)
+            camera.fit(X, y, method=method, weight=weight, verbose=verbose)
             gain = camera.report_gain()
 
             if gain["fp_saved"] <= 0:
@@ -282,127 +897,204 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
                 "tp_lost": gain["tp_lost"],
                 "cost_ratio": camera.cost_ratio,
                 "threshold": camera.threshold,
+                "X": X,
+                "y": y,
             }
-        
+
         except Exception as e:
             logger.warning(f"Error fitting camera {camera_name}: {e}")
             self.skipped.append(camera_name)
             return None
 
-    def _fit_cameras(self, method):
-        for (store, cam_id), group in self.df.groupby(['store', 'camera_id']):
-            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
-            if cam_info:
-                self.cameras_info.append(cam_info)
-     
-    def run(self, target_fp_reduction: int, strategy: str = "greedy"):
-        assert strategy in ["greedy", "lazy"], "Strategy must be 'greedy' or 'lazy'"
+    def _evaluate_thresholds(self, X, y, num_thresholds=50):
+        thresholds = np.linspace(0, 1, num_thresholds)
+        base_fp = np.sum(y == 0)
+        base_tp = np.sum(y == 1)
+        fp_reductions = []
+        tp_reductions = []
 
-        logger.info(f"Running {strategy} optimization...")
+        for t in thresholds:
+            preds = (X >= t).astype(int)
+            fp = np.sum((preds == 1) & (y == 0))
+            tp = np.sum((preds == 1) & (y == 1))
+            fp_reductions.append(base_fp - fp)
+            tp_reductions.append(base_tp - tp)
 
-        if strategy == "lazy":
-            self._lazy_run(target_fp_reduction)
-        else:
-            self._greedy_run(target_fp_reduction)
+        return thresholds, fp_reductions, tp_reductions
 
-    def _greedy_run(self, target_fp_reduction: int, method: str = "cost"):
-        assert method in ['cost', 'optuna']
-        start_time = time.time()
+    def _select_best_weight(self, store, cam_id, group, weights, method):
+        best_info = None
+        best_fp_saved = -1
+        best_tp_lost = float("inf")
 
-        self.target_fp_reduction = target_fp_reduction
+        for weight in weights:
+            cam_info = self._fit_camera(store, cam_id, group, weight, method=method, verbose=False)
+            if not cam_info:
+                continue
 
-        if not self.cameras_info:
-            self._fit_cameras(method)
+            if (cam_info["fp_saved"] > best_fp_saved) or \
+               (cam_info["fp_saved"] == best_fp_saved and cam_info["tp_lost"] < best_tp_lost):
+                best_info = cam_info
+                best_fp_saved = cam_info["fp_saved"]
+                best_tp_lost = cam_info["tp_lost"]
 
-        self.cameras_info.sort(key=lambda x: x["cost_ratio"])
+        return best_info
+    
+    def _unpack_lp_solution(self, x, threshold_data, num_thresholds, verbose):
+        for i in range(len(threshold_data)):
+            for k in range(num_thresholds):
+                if x[i][k].varValue > 0.5:
+                    store = threshold_data[i]["store"]
+                    cam_id = threshold_data[i]["cam_id"]
+                    threshold = threshold_data[i]["thresholds"][k]
+                    fp_saved = threshold_data[i]["fp_red"][k]
+                    tp_lost = threshold_data[i]["tp_red"][k]
 
-        self.selected = []
-        self.total_fp_saved = 0
-        self.total_tp_lost = 0
+                    cam_info = {
+                        "store": store,
+                        "camera_id": cam_id,
+                        "threshold": float(threshold),
+                        "fp_saved": int(fp_saved),
+                        "tp_lost": int(tp_lost)
+                    }
 
-        for cam in self.cameras_info:
-            if self.total_fp_saved >= target_fp_reduction:
-                break
-            self.selected.append(cam["camera_id"])
-            self.total_fp_saved += cam["fp_saved"]
-            self.total_tp_lost += cam["tp_lost"]
+                    self.cameras_info.append(cam_info)
+                    self.selected.append(cam_id)
+                    self.total_fp_saved += fp_saved
+                    self.total_tp_lost += tp_lost
 
-        elapsed = time.time() - start_time
+                    if verbose:
+                        logger.info(
+                            f"Fitted camera {cam_id}. Optimal th: {round(threshold, 4)}. "
+                            f"FP saved: {fp_saved}, TP lost: {tp_lost}"
+                        )
+                    break
 
-        summary = (
-            "\nOptimization Summary\n"
-            f"Target FP reduction : {self.target_fp_reduction}\n"
-            f"Total FP saved      : {self.total_fp_saved}\n"
-            f"Total TP lost       : {self.total_tp_lost}\n"
-            f"Used                : {len(self.selected)} / {len(self.cameras_info)} cameras"
-            f"Total optimization time: {elapsed:.6f} seconds"
-        )
-        if self.skipped:
-            summary += f"\nSkipped cameras      : {self.skipped}"
-
-        logger.info(summary)
-
-    def _lazy_run(self, target_fp_reduction: int, method: str = "cost"):
-        start_time = time.time()
-        self.target_fp_reduction = target_fp_reduction
-
-        grouped = self.df.groupby(["store", "camera_id"])
-
-        # Let's preselect the cameras that have an high numeber of normal events
-        # Because they're likelly to produce a lot of FP.
-        # We need to pay more attention to those.
-        priority_list = []
-        for (store, cam_id), group in grouped:
-            baseline_fp = (group["is_theft"] == 0).sum()
-            priority_list.append(((store, cam_id), baseline_fp))
-
-        priority_list.sort(key=lambda x: -x[1])
-
-        self.selected = []
-        self.total_fp_saved = 0
-        self.total_tp_lost = 0
-        self.cameras_info = []
-        self.skipped = []
-
-        for (store, cam_id), _ in priority_list:
-
-            # Let's fit thresholds until we get the target reduction
-            if self.total_fp_saved >= target_fp_reduction:
-                break
-
-            group = grouped.get_group((store, cam_id))
-            cam_info = self._fit_camera(store, cam_id, group, method=method, verbose=self.verbose)
-
-            if cam_info:
-                self.cameras_info.append(cam_info)
-                self.selected.append(cam_info["camera_id"])
-                self.total_fp_saved += cam_info["fp_saved"]
-                self.total_tp_lost += cam_info["tp_lost"]
-
-        elapsed = time.time() - start_time
-
-        summary = (
-            "\n[Lazy Greedy Optimization Summary]\n"
-            f"Target FP reduction : {self.target_fp_reduction}\n"
-            f"Total FP saved      : {self.total_fp_saved}\n"
-            f"Total TP lost       : {self.total_tp_lost}\n"
+    def _log_summary(self, title, total_fp, total_tp, elapsed):
+        logger.info(
+            f"\n[{title}]\n"
+            f"Target FP reduction : {self.target_fp_reduction:.0f}\n"
+            f"Total FP saved      : {self.total_fp_saved} / {total_fp}\n"
+            f"Total TP lost       : {self.total_tp_lost} / {total_tp}\n"
             f"Used                : {len(self.selected)} cameras\n"
             f"Skipped             : {len(self.skipped)} cameras\n"
             f"Total optimization time: {elapsed:.4f} seconds"
         )
-        logger.info(summary)
+
+    def run(self, target_fp_reduction: float, strategy: str = "greedy"):
+        logger.info(f"Running {strategy} optimization...")
+
+        strategies = {
+            "greedy": self._greedy_run,
+            "global": self._global_run
+        }
+
+        if strategy not in strategies:
+            raise ValueError(f"Unknown strategy '{strategy}'. Choose from: {list(strategies.keys())}")
+
+        strategies[strategy](target_fp_reduction)
+
+    def _greedy_run(self, target_fp_reduction: float, method: str = "cost"):
+        start_time = time.time()
+        self._reset_state()
+
+        total_tp_at_0 = (self.df["is_theft"] == 1).sum()
+        total_fp_at_0 = (self.df["is_theft"] == 0).sum()
+        self.target_fp_reduction = target_fp_reduction * total_fp_at_0
+
+        # To reduce the complexity, I've empirically found 
+        # a range of weights that make sense for different strategies (more agressive, to conservative).
+        # This of course can change depending on the data.
+        if target_fp_reduction >= 0.20:
+            selected_weight = 0.0001 
+        elif target_fp_reduction >= 0.15:
+            selected_weight = 0.05 
+        elif target_fp_reduction >= 0.10:
+            selected_weight = 0.1
+        else:
+            selected_weight = 0.5
+
+        priority_list = sorted(
+            self.grouped.groups.keys(),
+            key=lambda key: -((self.grouped.get_group(key)["is_theft"] == 0).sum())
+        )
+
+        for (store, cam_id) in priority_list:
+            if self.total_fp_saved >= self.target_fp_reduction:
+                break
+
+            group = self.grouped.get_group((store, cam_id))
+            best_info = self._select_best_weight(store, cam_id, group, [selected_weight], method)
+
+            if best_info:
+                self.cameras_info.append(best_info)
+                self.selected.append(best_info["camera_id"])
+                self.total_fp_saved += best_info["fp_saved"]
+                self.total_tp_lost += best_info["tp_lost"]
+            else:
+                self.skipped.append((store, cam_id))
+
+        self._log_summary("Lazy Greedy Optimization Summary", total_fp_at_0, total_tp_at_0, time.time() - start_time)
+
+    def _global_run(self, target_fp_reduction: float, verbose=True):
+        start_time = time.time()
+        self._reset_state()
+
+        total_tp_at_0 = (self.df["is_theft"] == 1).sum()
+        total_fp_at_0 = (self.df["is_theft"] == 0).sum()
+        self.target_fp_reduction = target_fp_reduction * total_fp_at_0
+
+        cameras = list(self.grouped.groups.keys())
+        N = len(cameras)
+        threshold_data = {}
+        num_thresholds = 50
+
+        for i, (store, cam_id) in enumerate(cameras):
+            group = self.grouped.get_group((store, cam_id))
+            X, y = group["probability"].values, group["is_theft"].values
+            thresholds, fp_red, tp_red = self._evaluate_thresholds(X, y, num_thresholds)
+            threshold_data[i] = {
+                "store": store,
+                "cam_id": cam_id,
+                "thresholds": thresholds,
+                "fp_red": fp_red,
+                "tp_red": tp_red
+            }
+
+        prob = LpProblem("Optimal_Threshold_Optimization", LpMinimize)
+        x = {i: [LpVariable(f"x_{i}_{k}", 0, 1, cat="Binary") for k in range(num_thresholds)] for i in range(N)}
+
+        prob += lpSum(threshold_data[i]["tp_red"][k] * x[i][k] for i in range(N) for k in range(num_thresholds))
+
+        for i in range(N):
+            prob += lpSum(x[i][k] for k in range(num_thresholds)) == 1, f"one_threshold_{i}"
+
+        prob += lpSum(threshold_data[i]["fp_red"][k] * x[i][k] for i in range(N) for k in range(num_thresholds)) >= self.target_fp_reduction
+
+        prob.solve()
+
+        if LpStatus[prob.status] == "Optimal":
+            self._unpack_lp_solution(x, threshold_data, num_thresholds, verbose)
+        else:
+            logger.warning(f"Optimization failed: {LpStatus[prob.status]}")
+            self.skipped = [f"{store}_{cam_id}" for store, cam_id in cameras]
+
+        self._log_summary("Optimal LP Optimization Summary", total_fp_at_0, total_tp_at_0, time.time() - start_time)
 
     def to_dict(self):
         return {
-            "target_fp_reduction": int(self.target_fp_reduction),
+            "target_fp_reduction": int(self.target_fp_reduction) if self.target_fp_reduction is not None else None,
             "total_fp_saved": int(self.total_fp_saved),
             "total_tp_lost": int(self.total_tp_lost),
-            "cameras_info": self.cameras_info
+            "cameras_info": [
+                {k: v for k, v in cam.items() if k not in {"X", "y", "camera"}}
+                for cam in self.cameras_info
+            ]
         }
 
     @classmethod
     def from_dict(cls, data, df):
-        obj = cls(df)
+        obj = cls(df, camera_model_cls=None)
         obj.__dict__.update(data)
         return obj
 
@@ -416,9 +1108,11 @@ class MultiCameraOptimizer(BaseGlobalOptimizer):
             return cls.from_dict(json.load(f), df)
 
     def __repr__(self):
-        return (f"<GreedyCameraSelector target={self.target_fp_reduction} "
-                f"| FP saved={self.total_fp_saved}, TP lost={self.total_tp_lost}, "
-                f"selected={len(self.selected)}, skipped={len(self.skipped)}>")
+        return (
+            f"<MultiCameraOptimizer target={self.target_fp_reduction} "
+            f"| FP saved={self.total_fp_saved}, TP lost={self.total_tp_lost}, "
+            f"selected={len(self.selected)}, skipped={len(self.skipped)}>"
+        )
 
 
 
@@ -488,7 +1182,7 @@ import numpy as np
 import logging
 from datetime import datetime
 from sklearn.metrics import precision_score, recall_score, f1_score, precision_recall_curve
-import optuna
+
 
 from .base_models import BaseCameraModel
 
@@ -501,7 +1195,7 @@ class CameraModel(BaseCameraModel):
     to classify theft events using a selected optimization strategy with included persistence.
     """
 
-    def fit(self, X, y, method="cost", verbose=True):
+    def fit(self, X, y, method="cost", weight=0.01, verbose=True):
         """
         Fit camera prediction model by selecting an optimal threshold based on prediction scores and labels.
 
@@ -530,9 +1224,7 @@ class CameraModel(BaseCameraModel):
         self.baseline_tp, self.baseline_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if method == "cost":
-            best_th = self._fit_cost(X, y)
-        elif method == "optuna":
-            best_th = self._fit_optuna(X, y, n_trials=50)
+            best_th = self._fit_cost(X, y, weight=weight)
         else:
             raise ValueError(f"Unknown optimization method: {method}")
 
@@ -555,9 +1247,9 @@ class CameraModel(BaseCameraModel):
     def _compute_cost_ratio(self, tp_lost, fp_saved):
         """Compute the cost as true positives lost per false positive saved."""
         return float("inf") if fp_saved <= 0 else tp_lost / (fp_saved + 1e-8)
-
-    def _fit_cost(self, X, y):
-        """Grid search for optimal threshold minimizing TP lost / FP saved."""
+    
+    def _fit_cost(self, X, y, weight=0.01):
+        """Grid search for optimal threshold minimizing weighted TP loss / FP saved, with debugging."""
         base_tp, base_fp = self._compute_tp_fp(X, y, threshold=self.threshold)
 
         if base_fp == 0 or base_tp == 0:
@@ -569,10 +1261,9 @@ class CameraModel(BaseCameraModel):
         best_score = np.inf
         best_th = self.threshold
 
-        for i in range(len(thresholds)):
-            tp = recall[i] * total_pos
-
-            # invert precision = TP / (TP + FP) to get FP
+        for i, th in enumerate(thresholds):
+            
+            tp = recall[i + 1] * total_pos
             fp = tp * (1 - precision[i]) / (precision[i] + 1e-8)
 
             delta_tp = base_tp - tp
@@ -581,29 +1272,18 @@ class CameraModel(BaseCameraModel):
             if delta_fp <= 0:
                 continue
 
-            cost = delta_tp / (delta_fp + 1e-8)
-            if cost < best_score or (cost == best_score and thresholds[i] > best_th):
+            if delta_tp == 0 and delta_fp > 0:
+                # Give a small cost to tie-break thresholds with no TP loss
+                cost = 1e-4
+            else:
+                cost = (delta_tp * weight) / (delta_fp  + 1e-8)
+
+            if cost < best_score or (cost == best_score and th > best_th):
                 best_score = cost
-                best_th = thresholds[i]
+                best_th = th
 
         return best_th
-
-    def _fit_optuna(self, X, y, n_trials=100):
-        base_tp, base_fp = self.baseline_tp, self.baseline_fp
-
-        def objective(trial):
-            threshold = trial.suggest_float("threshold", 0.0, 1.0)
-            tp, fp = self._compute_tp_fp(X, y, threshold)
-            delta_tp = base_tp - tp
-            delta_fp = base_fp - fp
-            if delta_fp <= 0:
-                return float("inf")
-            return delta_tp / (delta_fp + 1e-8)
-
-        study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=n_trials)
-        return study.best_params["threshold"]
-
+    
     def _apply_threshold(self, X, threshold):
         """Apply binary threshold to scores."""
         return (X >= threshold).astype(int)
@@ -662,6 +1342,55 @@ class CameraModel(BaseCameraModel):
         else:
             raise ValueError(f"Unsupported metric: {metric}")
 
+    def eval(self, X, y, threshold=None, verbose=True):
+        """
+        Evaluate a given threshold (or the fitted one) on data and return TP/FP stats.
+
+        Args:
+            X (np.ndarray): Prediction scores.
+            y (np.ndarray): Ground-truth labels.
+            threshold (float): Optional threshold to evaluate. Defaults to self.threshold.
+            verbose (bool): Whether to log evaluation summary.
+
+        Returns:
+            dict: Evaluation result with TP, FP, TP lost, FP saved, etc.
+        """
+        if threshold is None:
+            if not self._fitted:
+                raise RuntimeError("No threshold provided and model is not fitted.")
+            threshold = self.threshold
+
+        eval_tp, eval_fp = self._compute_tp_fp(X, y, threshold)
+
+        if self._fitted:
+            base_tp, base_fp = self.baseline_tp, self.baseline_fp
+        else:
+            base_tp, base_fp = self._compute_tp_fp(X, y, threshold=0.0)
+
+        tp_lost = base_tp - eval_tp
+        fp_saved = base_fp - eval_fp
+
+        result = {
+            "store": self.store,
+            "camera_id": self.camera_id,
+            "threshold": float(threshold),
+            "baseline_tp": int(base_tp),
+            "baseline_fp": int(base_fp),
+            "eval_tp": int(eval_tp),
+            "eval_fp": int(eval_fp),
+            "tp_lost": int(tp_lost),
+            "fp_saved": int(fp_saved)
+        }
+
+        if verbose:
+            logger.info(
+                f"Evaluated camera {self.camera_id}. "
+                f"Threshold: {round(threshold, 4)}. "
+                f"FP saved: {fp_saved}, TP lost: {tp_lost}"
+            )
+
+        return result
+
     def to_dict(self):
         """Serialize model to dictionary."""
         return {
@@ -708,6 +1437,89 @@ class CameraModel(BaseCameraModel):
 ================================================
 File: optimizer/viz_utils.py
 ================================================
+
+import os
+import matplotlib.pyplot as plt
+from sklearn.metrics import precision_recall_curve
+from tqdm import tqdm
+
+
+def save_fp_recall_plots(df, output_dir="plots"):
+    os.makedirs(output_dir, exist_ok=True)
+
+    grouped = df.groupby(["store", "camera_id"])
+
+    for (store_id, cam_id), group in tqdm(grouped):
+        if group["is_theft"].sum() == 0:
+            continue  # Skip groups with no thefts
+
+        y_true = group["is_theft"].values
+        y_scores = group["probability"].values
+
+        precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
+
+        false_positives = []
+        for thresh in thresholds:
+            y_pred = (y_scores >= thresh).astype(int)
+            fp = ((y_pred == 1) & (y_true == 0)).sum()
+            false_positives.append(fp)
+
+        # Plot
+        plt.figure(figsize=(6, 4))
+        plt.plot(recall[:-1], false_positives, drawstyle='steps-post')
+        plt.title(f"Store {store_id} | Camera {cam_id}")
+        plt.xlabel("Recall")
+        plt.ylabel("False Positives")
+        plt.grid(True)
+
+        # Save
+        filename = f"store_{store_id}_cam_{cam_id}.png"
+        filepath = os.path.join(output_dir, filename)
+        plt.savefig(filepath)
+        plt.close()
+
+def display_fp_vs_recall_grid(df, max_cols=5):
+    grouped = df.groupby(["store", "camera_id"])
+
+    # Keep only stores with theft events 
+    valid_groups = [
+        ((store_id, cam_id), group)
+        for (store_id, cam_id), group in grouped
+        if group["is_theft"].sum() > 0
+    ]
+
+    total = len(valid_groups)
+    ncols = max_cols
+    nrows = (total + ncols - 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 3))
+    axes = axes.flatten()
+
+    for ax_idx, ((store_id, cam_id), group) in enumerate(valid_groups):
+        y_true = group["is_theft"].values
+        y_scores = group["probability"].values
+
+        precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
+
+        false_positives = []
+        for thresh in thresholds:
+            y_pred = (y_scores >= thresh).astype(int)
+            fp = ((y_pred == 1) & (y_true == 0)).sum()
+            false_positives.append(fp)
+
+        axes[ax_idx].plot(recall[:-1], false_positives, drawstyle='steps-post')
+        axes[ax_idx].set_title(f"{store_id} | Cam {cam_id}", fontsize=8)
+        axes[ax_idx].set_xlabel("Recall", fontsize=7)
+        axes[ax_idx].set_ylabel("False Positives", fontsize=7)
+        axes[ax_idx].tick_params(labelsize=6)
+        axes[ax_idx].grid(True)
+
+    for i in range(len(valid_groups), len(axes)):
+        axes[i].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
 
 
 
