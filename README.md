@@ -1,5 +1,7 @@
-README - Veesion Data Science Challenge Submission
+Veesion Data Science Challenge Submission
 ===================================================
+
+Hi, I'm Nelson,
 
 This is my solution to the Veesion Data Science Challenge.
 
@@ -16,7 +18,7 @@ It includes:
 1. Create and activate a virtual environment:
 
    `python -m venv veesion-challenge-venv`
-   
+
    `source veesion-challenge-venv/bin/activate`
 
 
